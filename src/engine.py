@@ -230,14 +230,18 @@ def place_order_on_shelf(
     if free_rect_index is not None and (free_rect_index < 0 or free_rect_index >= len(shelf.free_rectangles)):
         return False, "Geçersiz boş alan seçimi."
 
-    free_rects = (
-        [shelf.free_rectangles[free_rect_index]]
-        if free_rect_index is not None
-        else list(shelf.free_rectangles)
-    )
+    if any(p.order_id == order.order_id for p in shelf.placements) or any(
+        existing.order_id == order.order_id for existing in state.orders
+    ):
+        return False, f"Bu sipariş kodu zaten kayıtlı: {order.order_id}"
 
-    for selected_rect in free_rects:
-        selected_idx = shelf.free_rectangles.index(selected_rect)
+    if free_rect_index is not None:
+        candidate_indices = [free_rect_index]
+    else:
+        candidate_indices = list(range(len(shelf.free_rectangles)))
+
+    for selected_idx in candidate_indices:
+        selected_rect = shelf.free_rectangles[selected_idx]
         for place_w, place_d, rotated in _candidate_orientations(order, algo):
             effective_w = place_w + config.clearance_width_cm
             effective_d = place_d + config.clearance_depth_cm
@@ -254,8 +258,8 @@ def place_order_on_shelf(
                     ship_date=order.ship_date,
                     x=placement_rect.x,
                     y=placement_rect.y,
-                    width=placement_rect.width,
-                    depth=placement_rect.depth,
+                    width=place_w,
+                    depth=place_d,
                     rotated=rotated,
                 )
             )

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any
 
 
@@ -14,8 +14,8 @@ class WarehouseConfig:
     shelf_width_cm: int = 360
     shelf_depth_cm: int = 250
     shelf_height_cm: int = 220
-    clearance_width_cm: int = 2
-    clearance_depth_cm: int = 2
+    clearance_width_cm: int = 1
+    clearance_depth_cm: int = 1
     smallest_pallet_width_cm: int = 80
     smallest_pallet_depth_cm: int = 120
 
@@ -44,7 +44,7 @@ class Order:
     pallet_depth_cm: int
     company: str
     ship_date: str
-    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     @property
     def requested_width_cm(self) -> int:

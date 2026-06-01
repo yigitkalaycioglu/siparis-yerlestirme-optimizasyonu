@@ -356,7 +356,7 @@ if view == "Sipariş Yerleştir":
                         )
                     )
                     save_state(state)
-                    st.session_state.package_preset_choice = normalized_label
+                    st.session_state.pending_package_preset_choice = normalized_label
                     st.session_state.package_preset_last_applied = ""
                     st.session_state.new_package_preset_label = ""
                     st.success(f'"{normalized_label}" hazır paketi kaydedildi.')

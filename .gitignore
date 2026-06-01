@@ -6,3 +6,52 @@ data/*.sqlite3
 .streamlit/secrets.toml
 __pycache__/
 *.pyc
+
+# Runtime / persistent app data
+data/state.json
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+data/runtime/
+data/uploads/
+data/backups/
+
+# Local environment / secrets
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# Server-only Docker deployment files
+Dockerfile
+docker-compose.yml
+docker-compose.override.yml
+deployer/
+
+# code-server local config / workspace artifacts
+.vscode-server/
+.code-server/
+.depo_code_config/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Logs
+*.log
+logs/
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

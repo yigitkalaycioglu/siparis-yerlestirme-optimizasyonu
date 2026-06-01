@@ -1,0 +1,8 @@
+data/state.json
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+.env
+.streamlit/secrets.toml
+__pycache__/
+*.pyc

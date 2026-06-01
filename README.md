@@ -6,6 +6,7 @@ Bu proje, oluklu mukavva fabrikası depolarında gelen siparişleri en uygun raf
 
 - Tamamen kişiselleştirilebilir bir parametre yapısı sunar.
 - Sipariş bilgisinden otomatik raf önerisi üretir.
+- Sık kullanılan paket ölçülerini hazır liste olarak kaydedip sipariş formunda yeniden kullanır.
 - Rafları adet değil, santimetre bazlı boş alan matrisi ile yönetir.
 - Taşıyıcıya manuel müdahale imkanı verir (rafı dolu/açık işaretleme).
 - Rafı tek tuşla tamamen boşaltma fonksiyonu sunar.
@@ -17,6 +18,7 @@ Bu proje, oluklu mukavva fabrikası depolarında gelen siparişleri en uygun raf
 
 Her sipariş için:
 
+- Hazır paket ölçüsü seçimi veya yeni paket ölçüsü kaydı
 - Siparişin palet üstü ölçüsü (genişlik, derinlik)
 - Palet ölçüsü (genişlik, derinlik)
 - Gideceği firma

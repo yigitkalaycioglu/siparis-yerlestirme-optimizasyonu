@@ -15,7 +15,7 @@ from src.engine import (
     place_order_on_shelf,
     suggest_shelves_for_order,
 )
-from src.models import AlgorithmConfig, Order, WarehouseConfig
+from src.models import AlgorithmConfig, Order, PackagePreset, WarehouseConfig
 from src.storage import load_state, save_state
 from src.visualization import build_scene_payload, render_three_html
 
@@ -78,6 +78,27 @@ if "shelf_mgmt_override" not in st.session_state:
 
 if "active_view" not in st.session_state:
     st.session_state.active_view = "Sipariş Yerleştir"
+
+if "package_preset_choice" not in st.session_state:
+    st.session_state.package_preset_choice = "Yeni Ekle +"
+if "package_preset_last_applied" not in st.session_state:
+    st.session_state.package_preset_last_applied = ""
+if "new_package_preset_label" not in st.session_state:
+    st.session_state.new_package_preset_label = ""
+if "order_order_id" not in st.session_state:
+    st.session_state.order_order_id = f"ORD-{uuid4().hex[:8].upper()}"
+if "order_product_width_cm" not in st.session_state:
+    st.session_state.order_product_width_cm = 100
+if "order_product_depth_cm" not in st.session_state:
+    st.session_state.order_product_depth_cm = 100
+if "order_pallet_width_cm" not in st.session_state:
+    st.session_state.order_pallet_width_cm = 80
+if "order_pallet_depth_cm" not in st.session_state:
+    st.session_state.order_pallet_depth_cm = 120
+if "order_company" not in st.session_state:
+    st.session_state.order_company = "Örnek Firma"
+if "order_ship_date" not in st.session_state:
+    st.session_state.order_ship_date = date.today()
 
 # 3B sekmesi durumu (filtre vs.)
 if "view3d_aisles" not in st.session_state:
@@ -275,22 +296,73 @@ st.markdown("---")
 if view == "Sipariş Yerleştir":
     st.subheader("Yeni Sipariş")
     st.info(
-        "Formu doldurun ve 'Uygun Raf Öner ve Yerleştir' ile en iyi adayı otomatik yerleştirin. "
+        "Hazır paket seçebilir, yeni ölçü girebilir veya mevcut ölçüleri preset olarak kaydedebilirsiniz. "
         "Yerleştirme başarılıysa durum kaydedilir."
     )
-    with st.form("order_form"):
-        order_id = st.text_input("Sipariş kodu", value=f"ORD-{uuid4().hex[:8].upper()}")
-        c1, c2 = st.columns(2)
-        with c1:
-            product_width_cm = st.number_input("Ürün genişliği (cm)", min_value=1, value=100)
-            pallet_width_cm = st.number_input("Palet genişliği (cm)", min_value=1, value=80)
-        with c2:
-            product_depth_cm = st.number_input("Ürün derinliği (cm)", min_value=1, value=100)
-            pallet_depth_cm = st.number_input("Palet derinliği (cm)", min_value=1, value=120)
-        company = st.text_input("Firma", value="Örnek Firma")
-        ship_date = st.date_input("Sevk tarihi", value=date.today())
 
-        submit_order = st.form_submit_button("Uygun Raf Öner ve Yerleştir")
+    preset_options = ["Yeni Ekle +"] + [preset.label for preset in state.package_presets]
+    selected_preset_label = st.selectbox("Hazır paket ölçüsü", options=preset_options, key="package_preset_choice")
+
+    if selected_preset_label != "Yeni Ekle +":
+        selected_preset = next((preset for preset in state.package_presets if preset.label == selected_preset_label), None)
+        if selected_preset and st.session_state.package_preset_last_applied != selected_preset_label:
+            st.session_state.order_product_width_cm = selected_preset.product_width_cm
+            st.session_state.order_product_depth_cm = selected_preset.product_depth_cm
+            st.session_state.order_pallet_width_cm = selected_preset.pallet_width_cm
+            st.session_state.order_pallet_depth_cm = selected_preset.pallet_depth_cm
+            st.session_state.package_preset_last_applied = selected_preset_label
+            st.rerun()
+
+    if selected_preset_label == "Yeni Ekle +":
+        st.caption("Yeni bir hazır paket oluşturmak için aşağıdaki ölçüleri girin ve kaydedin.")
+
+    order_id = st.text_input("Sipariş kodu", key="order_order_id")
+    c1, c2 = st.columns(2)
+    with c1:
+        product_width_cm = st.number_input(
+            "Ürün genişliği (cm)", min_value=1, key="order_product_width_cm"
+        )
+        pallet_width_cm = st.number_input("Palet genişliği (cm)", min_value=1, key="order_pallet_width_cm")
+    with c2:
+        product_depth_cm = st.number_input("Ürün derinliği (cm)", min_value=1, key="order_product_depth_cm")
+        pallet_depth_cm = st.number_input("Palet derinliği (cm)", min_value=1, key="order_pallet_depth_cm")
+    company = st.text_input("Firma", key="order_company")
+    ship_date = st.date_input("Sevk tarihi", key="order_ship_date")
+
+    if selected_preset_label == "Yeni Ekle +":
+        with st.container(border=True):
+            st.markdown("##### Hazır Paket Kaydet")
+            st.caption("Bu alan, aşağıdaki mevcut ölçüleri bir şablon olarak saklar.")
+            preset_label = st.text_input(
+                "Hazır paket adı",
+                key="new_package_preset_label",
+                placeholder="Örn. Standart 80x120",
+            )
+            save_preset = st.button("Paketi Kaydet", key="save_package_preset")
+            if save_preset:
+                normalized_label = preset_label.strip()
+                if not normalized_label:
+                    st.error("Hazır paket adı boş olamaz.")
+                elif any(preset.label == normalized_label for preset in state.package_presets):
+                    st.error("Bu isimde bir hazır paket zaten kayıtlı.")
+                else:
+                    state.package_presets.append(
+                        PackagePreset(
+                            label=normalized_label,
+                            product_width_cm=int(product_width_cm),
+                            product_depth_cm=int(product_depth_cm),
+                            pallet_width_cm=int(pallet_width_cm),
+                            pallet_depth_cm=int(pallet_depth_cm),
+                        )
+                    )
+                    save_state(state)
+                    st.session_state.package_preset_choice = normalized_label
+                    st.session_state.package_preset_last_applied = ""
+                    st.session_state.new_package_preset_label = ""
+                    st.success(f'"{normalized_label}" hazır paketi kaydedildi.')
+                    st.rerun()
+
+    submit_order = st.button("Uygun Raf Öner ve Yerleştir")
 
     if submit_order:
         order = Order(

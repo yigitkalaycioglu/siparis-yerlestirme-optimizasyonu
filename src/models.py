@@ -36,6 +36,15 @@ class AlgorithmConfig:
 
 
 @dataclass
+class PackagePreset:
+    label: str
+    product_width_cm: int
+    product_depth_cm: int
+    pallet_width_cm: int
+    pallet_depth_cm: int
+
+
+@dataclass
 class Order:
     order_id: str
     product_width_cm: int
@@ -120,6 +129,7 @@ class AppState:
     warehouse_config: WarehouseConfig
     algorithm_config: AlgorithmConfig
     shelves: list[ShelfState]
+    package_presets: list[PackagePreset] = field(default_factory=list)
     orders: list[Order] = field(default_factory=list)
 
 
@@ -134,6 +144,7 @@ def to_dict(state: AppState) -> dict[str, Any]:
 def from_dict(data: dict[str, Any]) -> AppState:
     warehouse_config = WarehouseConfig(**data.get("warehouse_config", {}))
     algorithm_config = AlgorithmConfig(**data.get("algorithm_config", {}))
+    package_presets = [PackagePreset(**preset_data) for preset_data in data.get("package_presets", [])]
 
     shelves: list[ShelfState] = []
     for item in data.get("shelves", []):
@@ -160,5 +171,6 @@ def from_dict(data: dict[str, Any]) -> AppState:
         warehouse_config=warehouse_config,
         algorithm_config=algorithm_config,
         shelves=shelves,
+        package_presets=package_presets,
         orders=orders,
     )

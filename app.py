@@ -83,8 +83,12 @@ if "package_preset_choice" not in st.session_state:
     st.session_state.package_preset_choice = "Yeni Ekle +"
 if "package_preset_last_applied" not in st.session_state:
     st.session_state.package_preset_last_applied = ""
+if "package_preset_pending_choice" not in st.session_state:
+    st.session_state.package_preset_pending_choice = ""
 if "new_package_preset_label" not in st.session_state:
     st.session_state.new_package_preset_label = ""
+if "new_package_preset_label_pending_reset" not in st.session_state:
+    st.session_state.new_package_preset_label_pending_reset = False
 if "order_order_id" not in st.session_state:
     st.session_state.order_order_id = f"ORD-{uuid4().hex[:8].upper()}"
 if "order_product_width_cm" not in st.session_state:
@@ -301,6 +305,16 @@ if view == "Sipariş Yerleştir":
     )
 
     preset_options = ["Yeni Ekle +"] + [preset.label for preset in state.package_presets]
+
+    pending_preset_choice = st.session_state.package_preset_pending_choice
+    if pending_preset_choice:
+        st.session_state.package_preset_choice = pending_preset_choice if pending_preset_choice in preset_options else "Yeni Ekle +"
+        st.session_state.package_preset_pending_choice = ""
+
+    if st.session_state.new_package_preset_label_pending_reset:
+        st.session_state.new_package_preset_label = ""
+        st.session_state.new_package_preset_label_pending_reset = False
+
     selected_preset_label = st.selectbox("Hazır paket ölçüsü", options=preset_options, key="package_preset_choice")
 
     if selected_preset_label != "Yeni Ekle +":
@@ -356,9 +370,9 @@ if view == "Sipariş Yerleştir":
                         )
                     )
                     save_state(state)
-                    st.session_state.package_preset_choice = normalized_label
+                    st.session_state.package_preset_pending_choice = normalized_label
                     st.session_state.package_preset_last_applied = ""
-                    st.session_state.new_package_preset_label = ""
+                    st.session_state.new_package_preset_label_pending_reset = True
                     st.success(f'"{normalized_label}" hazır paketi kaydedildi.')
                     st.rerun()
 

@@ -9592,13 +9592,30 @@
       "depth_cm": 250,
       "free_rectangles": [
         {
-          "x": 0,
+          "x": 102,
           "y": 0,
+          "width": 258,
+          "depth": 122
+        },
+        {
+          "x": 0,
+          "y": 122,
           "width": 360,
-          "depth": 250
+          "depth": 128
         }
       ],
-      "placements": [],
+      "placements": [
+        {
+          "order_id": "ORD-8D3BDF5C",
+          "company": "Örnek Firma",
+          "ship_date": "2026-06-01",
+          "x": 0,
+          "y": 0,
+          "width": 100,
+          "depth": 120,
+          "rotated": false
+        }
+      ],
       "manual_full": false
     },
     {
@@ -29920,12 +29937,6 @@
       "depth_cm": 250,
       "free_rectangles": [
         {
-          "x": 0,
-          "y": 142,
-          "width": 360,
-          "depth": 108
-        },
-        {
           "x": 344,
           "y": 0,
           "width": 16,
@@ -29936,6 +29947,18 @@
           "y": 122,
           "width": 158,
           "depth": 20
+        },
+        {
+          "x": 0,
+          "y": 244,
+          "width": 360,
+          "depth": 6
+        },
+        {
+          "x": 244,
+          "y": 142,
+          "width": 116,
+          "depth": 102
         }
       ],
       "placements": [
@@ -29958,6 +29981,26 @@
           "width": 140,
           "depth": 120,
           "rotated": false
+        },
+        {
+          "order_id": "ORD-EFF0F22A",
+          "company": "Örnek Firma",
+          "ship_date": "2026-06-01",
+          "x": 0,
+          "y": 142,
+          "width": 120,
+          "depth": 100,
+          "rotated": true
+        },
+        {
+          "order_id": "ORD-67300CC1",
+          "company": "Örnek Firma",
+          "ship_date": "2026-06-01",
+          "x": 122,
+          "y": 142,
+          "width": 120,
+          "depth": 100,
+          "rotated": true
         }
       ],
       "manual_full": false
@@ -30124,16 +30167,16 @@
           "depth": 40
         },
         {
-          "x": 182,
-          "y": 142,
-          "width": 178,
-          "depth": 102
-        },
-        {
           "x": 0,
           "y": 244,
           "width": 360,
           "depth": 6
+        },
+        {
+          "x": 304,
+          "y": 142,
+          "width": 56,
+          "depth": 102
         }
       ],
       "placements": [
@@ -30166,6 +30209,16 @@
           "width": 180,
           "depth": 100,
           "rotated": false
+        },
+        {
+          "order_id": "ORD-14C948C2",
+          "company": "Örnek Firma",
+          "ship_date": "2026-06-01",
+          "x": 182,
+          "y": 142,
+          "width": 120,
+          "depth": 100,
+          "rotated": true
         }
       ],
       "manual_full": false
@@ -178341,6 +178394,57 @@
       "manual_full": false
     }
   ],
+  "package_presets": [
+    {
+      "label": "paket 1",
+      "product_width_cm": 100,
+      "product_depth_cm": 100,
+      "pallet_width_cm": 80,
+      "pallet_depth_cm": 120
+    },
+    {
+      "label": "as",
+      "product_width_cm": 100,
+      "product_depth_cm": 100,
+      "pallet_width_cm": 80,
+      "pallet_depth_cm": 120
+    },
+    {
+      "label": "asd",
+      "product_width_cm": 100,
+      "product_depth_cm": 100,
+      "pallet_width_cm": 80,
+      "pallet_depth_cm": 120
+    },
+    {
+      "label": "paket 3",
+      "product_width_cm": 100,
+      "product_depth_cm": 100,
+      "pallet_width_cm": 80,
+      "pallet_depth_cm": 120
+    },
+    {
+      "label": "paket 4",
+      "product_width_cm": 100,
+      "product_depth_cm": 100,
+      "pallet_width_cm": 80,
+      "pallet_depth_cm": 120
+    },
+    {
+      "label": "paket 5",
+      "product_width_cm": 100,
+      "product_depth_cm": 100,
+      "pallet_width_cm": 80,
+      "pallet_depth_cm": 120
+    },
+    {
+      "label": "asdfq",
+      "product_width_cm": 100,
+      "product_depth_cm": 100,
+      "pallet_width_cm": 80,
+      "pallet_depth_cm": 120
+    }
+  ],
   "orders": [
     {
       "order_id": "ORD-1E69916A",
@@ -188341,6 +188445,46 @@
       "company": "İstanbul Kargo Ltd.",
       "ship_date": "2026-07-31",
       "created_at": "2026-05-18T09:06:55.798890"
+    },
+    {
+      "order_id": "ORD-14C948C2",
+      "product_width_cm": 100,
+      "product_depth_cm": 100,
+      "pallet_width_cm": 80,
+      "pallet_depth_cm": 120,
+      "company": "Örnek Firma",
+      "ship_date": "2026-06-01",
+      "created_at": "2026-06-01T17:13:01.140841+00:00"
+    },
+    {
+      "order_id": "ORD-EFF0F22A",
+      "product_width_cm": 100,
+      "product_depth_cm": 100,
+      "pallet_width_cm": 80,
+      "pallet_depth_cm": 120,
+      "company": "Örnek Firma",
+      "ship_date": "2026-06-01",
+      "created_at": "2026-06-01T17:23:36.377940+00:00"
+    },
+    {
+      "order_id": "ORD-67300CC1",
+      "product_width_cm": 100,
+      "product_depth_cm": 100,
+      "pallet_width_cm": 80,
+      "pallet_depth_cm": 120,
+      "company": "Örnek Firma",
+      "ship_date": "2026-06-01",
+      "created_at": "2026-06-01T17:26:01.476953+00:00"
+    },
+    {
+      "order_id": "ORD-8D3BDF5C",
+      "product_width_cm": 100,
+      "product_depth_cm": 100,
+      "pallet_width_cm": 80,
+      "pallet_depth_cm": 120,
+      "company": "Örnek Firma",
+      "ship_date": "2026-06-01",
+      "created_at": "2026-06-01T17:27:10.238836+00:00"
     }
   ]
 }

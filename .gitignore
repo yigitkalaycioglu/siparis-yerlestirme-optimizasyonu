@@ -24,6 +24,7 @@ data/backups/
 
 # Server-only Docker deployment files
 Dockerfile
+dockerfile
 docker-compose.yml
 docker-compose.override.yml
 deployer/

@@ -14,7 +14,7 @@ Bu proje, oluklu mukavva fabrikası depolarında gelen siparişleri en uygun raf
 - Rafı tek tuşla tamamen boşaltma fonksiyonu sunar.
 - Tüm rafları tek işlemde boşaltır ve işlem öncesi onay ister.
 - Raf yönetiminde hızlı seçim alanlarıyla (A/S/R/Y) raf seçimini hızlandırır.
-- 3B görselleştirme olmadan çekirdek optimizasyon problemini çözer.
+- 3B depo simülasyonunda tüm raf tiplerini, dolulukları ve yerleşen sipariş bloklarını gösterir.
 
 ## Girdi Verileri
 
@@ -25,6 +25,10 @@ Her sipariş için:
 - Palet ölçüsü (genişlik, derinlik)
 - Gideceği firma
 - Sevk tarihi
+- Termin tarihi
+- Giriş tarihi
+- Gideceği yer/hedef
+- Maksimum kalış süresi
 
 ## Arayüzden Değiştirilebilen Parametreler
 
@@ -57,7 +61,8 @@ Her sipariş için:
 4. Her aday için skor hesaplanır:
    - Düşük atık alan (iyi)
    - Kısa yol/mesafe (iyi)
-   - Aynı firma ve yakın tarih kümelendirme (iyi)
+   - Aynı firma, aynı hedef ve yakın termin/sevk tarihi kümelendirme (iyi)
+   - Termin önceliği, giriş tarihi ve maksimum kalış süresi riski
    - Raf dengesi (aşırı tek raf yükünü azaltma)
 5. En düşük skorlu raf seçilir ve sipariş yerleştirilir.
 6. Yerleşim sonrası raf boş alanları guillotine split ile güncellenir.
@@ -89,4 +94,4 @@ streamlit run app.py
 ## Notlar
 
 - Topolojiyi (koridor/sıra/raf yapısı) değiştirirken yeniden kurulum seçeneği aktif edilirse eski yerleşimler temizlenir.
-- Mevcut sürüm 2D alan optimizasyonu yapar. 3B görselleştirme ve dikey istif kuralları sonraki aşamaya bırakılmıştır.
+- Mevcut sürüm raf içi yerleşimi 2D alan optimizasyonu ile yapar; 3B görünüm raf tiplerini ve yerleşimleri operasyonel simülasyon olarak gösterir.

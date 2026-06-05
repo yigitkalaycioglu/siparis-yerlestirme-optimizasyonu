@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import date, datetime, timezone
 from typing import Any
 
@@ -44,11 +44,16 @@ class AlgorithmConfig:
     allow_rotation: bool = True
     cluster_same_company: bool = True
     cluster_same_ship_date: bool = True
+    cluster_same_destination: bool = True
     ship_date_cluster_days: int = 2
+    due_date_priority_days: int = 7
     weight_fill_efficiency: float = 0.45
     weight_travel_distance: float = 0.25
     weight_company_cluster: float = 0.15
     weight_date_cluster: float = 0.1
+    weight_destination_cluster: float = 0.12
+    weight_due_date_priority: float = 0.08
+    weight_storage_duration: float = 0.08
     weight_balance: float = 0.05
     top_k_suggestions: int = 5
     min_fragment_cm2: int = 400
@@ -72,6 +77,10 @@ class Order:
     pallet_depth_cm: int
     company: str
     ship_date: str
+    due_date: str = ""
+    entry_date: str = field(default_factory=lambda: date.today().isoformat())
+    destination: str = ""
+    max_storage_days: int = 0
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     @property
@@ -81,6 +90,27 @@ class Order:
     @property
     def requested_depth_cm(self) -> int:
         return max(self.product_depth_cm, self.pallet_depth_cm)
+
+    @property
+    def effective_due_date(self) -> str:
+        return self.due_date or self.ship_date
+
+    @property
+    def destination_key(self) -> str:
+        return (self.destination or self.company or "-").strip()
+
+    @property
+    def planned_storage_days(self) -> int:
+        try:
+            return max(0, (parse_ship_date(self.effective_due_date) - parse_ship_date(self.entry_date)).days)
+        except ValueError:
+            return 0
+
+    @property
+    def storage_pressure(self) -> float:
+        if self.max_storage_days <= 0:
+            return 0.0
+        return min(1.0, self.planned_storage_days / self.max_storage_days)
 
 
 @dataclass
@@ -105,6 +135,10 @@ class Placement:
     width: int
     depth: int
     rotated: bool
+    due_date: str = ""
+    entry_date: str = ""
+    destination: str = ""
+    max_storage_days: int = 0
 
     @property
     def area(self) -> int:
@@ -122,6 +156,7 @@ class ShelfState:
     depth_cm: int
     free_rectangles: list[Rect]
     shelf_type: str = "Standart"
+    height_cm: int = 220
     placements: list[Placement] = field(default_factory=list)
     manual_full: bool = False
 
@@ -192,8 +227,13 @@ def _normalize_shelf_type_layouts(raw_layouts: Any) -> dict[str, dict[str, Any]]
     return normalized
 
 
+def _dataclass_payload(model: type, payload: dict[str, Any]) -> dict[str, Any]:
+    allowed = {item.name for item in fields(model)}
+    return {key: value for key, value in dict(payload or {}).items() if key in allowed}
+
+
 def parse_ship_date(value: str) -> date:
-    return datetime.strptime(value, "%Y-%m-%d").date()
+    return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
 
 
 def to_dict(state: AppState) -> dict[str, Any]:
@@ -201,9 +241,12 @@ def to_dict(state: AppState) -> dict[str, Any]:
 
 
 def from_dict(data: dict[str, Any]) -> AppState:
-    warehouse_config = WarehouseConfig(**data.get("warehouse_config", {}))
-    algorithm_config = AlgorithmConfig(**data.get("algorithm_config", {}))
-    package_presets = [PackagePreset(**preset_data) for preset_data in data.get("package_presets", [])]
+    warehouse_config = WarehouseConfig(**_dataclass_payload(WarehouseConfig, data.get("warehouse_config", {})))
+    algorithm_config = AlgorithmConfig(**_dataclass_payload(AlgorithmConfig, data.get("algorithm_config", {})))
+    package_presets = [
+        PackagePreset(**_dataclass_payload(PackagePreset, preset_data))
+        for preset_data in data.get("package_presets", [])
+    ]
     shelf_types = list(data.get("shelf_types", [])) or ["Standart"]
     raw_shelf_type_configs = data.get("shelf_type_configs", {}) or {}
     raw_shelf_type_layouts = _normalize_shelf_type_layouts(data.get("shelf_type_layouts", {}))
@@ -230,8 +273,13 @@ def from_dict(data: dict[str, Any]) -> AppState:
     shelves: list[ShelfState] = []
     for index, item in enumerate(data.get("shelves", [])):
         free_rectangles = [Rect(**r) for r in item.get("free_rectangles", [])]
-        placements = [Placement(**p) for p in item.get("placements", [])]
+        placements = [Placement(**_dataclass_payload(Placement, p)) for p in item.get("placements", [])]
         shelf_type = str(item.get("shelf_type") or shelf_types[index % len(shelf_types)]).strip() or shelf_types[0]
+        shelf_config = shelf_type_configs.get(shelf_type, make_shelf_type_config(shelf_type, warehouse_config))
+        width_cm = int(item.get("width_cm", shelf_config.shelf_width_cm))
+        depth_cm = int(item.get("depth_cm", shelf_config.shelf_depth_cm))
+        if not free_rectangles:
+            free_rectangles = [Rect(x=0, y=0, width=width_cm, depth=depth_cm)]
         shelves.append(
             ShelfState(
                 shelf_id=item["shelf_id"],
@@ -239,16 +287,17 @@ def from_dict(data: dict[str, Any]) -> AppState:
                 side_index=item["side_index"],
                 row_index=item["row_index"],
                 y_index=item["y_index"],
-                width_cm=item["width_cm"],
-                depth_cm=item["depth_cm"],
+                width_cm=width_cm,
+                depth_cm=depth_cm,
                 shelf_type=shelf_type,
+                height_cm=int(item.get("height_cm", shelf_config.shelf_height_cm)),
                 free_rectangles=free_rectangles,
                 placements=placements,
                 manual_full=item.get("manual_full", False),
             )
         )
 
-    orders = [Order(**order_data) for order_data in data.get("orders", [])]
+    orders = [Order(**_dataclass_payload(Order, order_data)) for order_data in data.get("orders", [])]
 
     return AppState(
         warehouse_config=warehouse_config,

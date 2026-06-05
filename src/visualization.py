@@ -18,6 +18,28 @@ DEFAULT_LAYOUT: dict[str, float] = {
     "placement_height": 0.48,
 }
 
+SHELF_TYPE_PALETTE = [
+  "#2d7dd2",
+  "#f45d48",
+  "#17a398",
+  "#f7b32b",
+  "#7b61ff",
+  "#2fbf71",
+  "#b56576",
+  "#4d908e",
+  "#f9844a",
+  "#577590",
+]
+
+
+def shelf_type_color(shelf_type: str, type_order: Iterable[str] | None = None) -> str:
+  ordered_types = [item for item in (type_order or []) if str(item).strip()]
+  if shelf_type in ordered_types:
+    index = ordered_types.index(shelf_type)
+  else:
+    index = sum(ord(char) for char in shelf_type)
+  return SHELF_TYPE_PALETTE[index % len(SHELF_TYPE_PALETTE)]
+
 
 def build_scene_payload(
   state: AppState,
@@ -42,6 +64,8 @@ def build_scene_payload(
   blocked_shelves = 0
   type_counts = Counter(shelf.shelf_type for shelf in state.shelves)
   resolved_types = state.shelf_types or sorted(type_counts.keys()) or ["Standart"]
+  type_configs = state.shelf_type_configs
+  type_colors = {shelf_type: shelf_type_color(shelf_type, resolved_types) for shelf_type in resolved_types}
 
   for shelf in state.shelves:
     if aisle_filter is not None and shelf.aisle_index not in aisle_filter:
@@ -69,6 +93,10 @@ def build_scene_payload(
             "order_id": placement.order_id,
             "company": placement.company,
             "ship_date": placement.ship_date,
+            "due_date": placement.due_date or placement.ship_date,
+            "entry_date": placement.entry_date,
+            "destination": placement.destination or placement.company,
+            "max_storage_days": placement.max_storage_days,
             "x": placement.x,
             "y": placement.y,
             "width": placement.width,
@@ -87,7 +115,9 @@ def build_scene_payload(
         "y_index": shelf.y_index,
         "width_cm": shelf.width_cm,
         "depth_cm": shelf.depth_cm,
+        "height_cm": shelf.height_cm,
         "shelf_type": shelf.shelf_type,
+        "type_color": type_colors.get(shelf.shelf_type, shelf_type_color(shelf.shelf_type, resolved_types)),
         "utilization": shelf.utilization,
         "manual_full": shelf.manual_full,
         "placement_count": len(shelf.placements),
@@ -118,10 +148,15 @@ def build_scene_payload(
         "type": shelf_type,
         "count": int(type_counts.get(shelf_type, 0)),
         "visible": shelf_type_filter is None or shelf_type in shelf_type_filter,
+        "color": type_colors.get(shelf_type, shelf_type_color(shelf_type, resolved_types)),
+        "width_cm": getattr(type_configs.get(shelf_type), "shelf_width_cm", 0),
+        "depth_cm": getattr(type_configs.get(shelf_type), "shelf_depth_cm", 0),
+        "height_cm": getattr(type_configs.get(shelf_type), "shelf_height_cm", 0),
       }
       for shelf_type in resolved_types
     ],
     "highlight_shelf_id": highlight_shelf_id,
+    "shelf_type_colors": type_colors,
     "shelves": shelves,
   }
 
@@ -343,6 +378,9 @@ def render_three_html(payload: dict, placement_color: str = "27ae60") -> str:
   }}
 
   function typeColor(typeName) {{
+    if (payload.shelf_type_colors && payload.shelf_type_colors[typeName]) {{
+      return new THREE.Color(payload.shelf_type_colors[typeName]);
+    }}
     const hue = hashString(typeName || 'Standart') % 360;
     const color = new THREE.Color();
     color.setHSL(hue / 360, 0.42, 0.58);
@@ -365,10 +403,13 @@ def render_three_html(payload: dict, placement_color: str = "27ae60") -> str:
 
   typeLegend.innerHTML = (payload.shelf_type_summary || []).map((entry) => {{
     const swatch = typeColor(entry.type).getStyle();
+    const dims = entry.width_cm && entry.depth_cm && entry.height_cm
+      ? `${{entry.width_cm}}×${{entry.depth_cm}}×${{entry.height_cm}}`
+      : '';
     return `
       <div class="legend-item" style="opacity:${{entry.visible ? 1 : 0.45}}">
         <span class="legend-swatch" style="background:${{swatch}}"></span>
-        <span>${{entry.type}}</span>
+        <span>${{entry.type}}${{dims ? ` · ${{dims}} cm` : ''}}</span>
         <strong style="margin-left:auto;color:#fff">${{entry.count}}</strong>
       </div>
     `;
@@ -376,17 +417,34 @@ def render_three_html(payload: dict, placement_color: str = "27ae60") -> str:
 
   const L = payload.layout;
   const W = payload.warehouse;
+  const maxShelfWidthCm = Math.max(1, ...payload.shelves.map(s => s.width_cm || 1));
+  const maxShelfDepthCm = Math.max(1, ...payload.shelves.map(s => s.depth_cm || 1));
+  const maxShelfHeightCm = Math.max(1, ...payload.shelves.map(s => s.height_cm || 1));
+  const P = {{
+    aisle_pitch: Math.max(L.aisle_pitch, L.shelf_width + 2.4),
+    row_pitch: Math.max(L.row_pitch, L.shelf_depth + 0.5),
+    side_gap: Math.max(L.side_gap, L.shelf_depth * 0.8 + 0.55),
+    level_pitch: Math.max(L.level_pitch, L.shelf_height + L.placement_height + 0.28),
+  }};
 
-  const extentX = (W.aisles - 1) * L.aisle_pitch;
-  const extentZ = (W.rows_per_side - 1) * L.row_pitch;
-  const extentY = (W.shelves_per_row - 1) * L.level_pitch;
+  function shelfRenderSize(shelf) {{
+    return {{
+      width: Math.max(0.35, ((shelf.width_cm || maxShelfWidthCm) / maxShelfWidthCm) * L.shelf_width),
+      depth: Math.max(0.22, ((shelf.depth_cm || maxShelfDepthCm) / maxShelfDepthCm) * L.shelf_depth),
+      height: Math.max(0.045, ((shelf.height_cm || maxShelfHeightCm) / maxShelfHeightCm) * L.shelf_height),
+    }};
+  }}
+
+  const extentX = (W.aisles - 1) * P.aisle_pitch;
+  const extentZ = (W.rows_per_side - 1) * P.row_pitch;
+  const extentY = (W.shelves_per_row - 1) * P.level_pitch;
 
   const centerX = extentX / 2;
   const centerZ = extentZ / 2;
   const centerY = extentY * 0.4;
 
   const footprintX = extentX + L.shelf_width + 4;
-  const footprintZ = extentZ + 2 * L.side_gap + L.shelf_depth + 4;
+  const footprintZ = extentZ + 2 * P.side_gap + L.shelf_depth + 4;
   const gridSize = Math.max(20, footprintX, footprintZ);
   const cameraDistance = Math.max(20, Math.max(footprintX, footprintZ) * 0.85);
 
@@ -460,9 +518,9 @@ def render_three_html(payload: dict, placement_color: str = "27ae60") -> str:
   let highlightWorldPos = null;
 
   function shelfPosition(shelf) {{
-    const x = (shelf.aisle_index - 1) * payload.layout.aisle_pitch;
-    const z = (shelf.row_index - 1) * payload.layout.row_pitch + (shelf.side_index === 1 ? -payload.layout.side_gap : payload.layout.side_gap);
-    const y = (shelf.y_index - 1) * payload.layout.level_pitch;
+    const x = (shelf.aisle_index - 1) * P.aisle_pitch;
+    const z = (shelf.row_index - 1) * P.row_pitch + (shelf.side_index === 1 ? -P.side_gap : P.side_gap);
+    const y = (shelf.y_index - 1) * P.level_pitch;
     return [x, y, z];
   }}
 
@@ -470,8 +528,9 @@ def render_three_html(payload: dict, placement_color: str = "27ae60") -> str:
 
   payload.shelves.forEach((shelf, index) => {{
     const [x, y, z] = shelfPosition(shelf);
+    const shelfSize = shelfRenderSize(shelf);
     dummy.position.set(x, y, z);
-    dummy.scale.set(payload.layout.shelf_width, payload.layout.shelf_height, payload.layout.shelf_depth);
+    dummy.scale.set(shelfSize.width, shelfSize.height, shelfSize.depth);
     dummy.updateMatrix();
     if (shelfMesh) shelfMesh.setMatrixAt(index, dummy.matrix);
 
@@ -488,12 +547,12 @@ def render_three_html(payload: dict, placement_color: str = "27ae60") -> str:
     if (shelfMesh) shelfMesh.setColorAt(index, color);
 
     if (placementMesh && shelf.placements.length) {{
-      const baseY = y + (payload.layout.shelf_height * 0.5) + (payload.layout.placement_height * 0.5) + 0.02;
+      const baseY = y + (shelfSize.height * 0.5) + (payload.layout.placement_height * 0.5) + 0.02;
       shelf.placements.forEach((placement) => {{
-        const widthScale = Math.max(0.08, (placement.width / shelf.width_cm) * payload.layout.shelf_width);
-        const depthScale = Math.max(0.08, (placement.depth / shelf.depth_cm) * payload.layout.shelf_depth);
-        const localX = ((placement.x + placement.width / 2) / shelf.width_cm - 0.5) * payload.layout.shelf_width;
-        const localZ = ((placement.y + placement.depth / 2) / shelf.depth_cm - 0.5) * payload.layout.shelf_depth;
+        const widthScale = Math.max(0.08, (placement.width / shelf.width_cm) * shelfSize.width);
+        const depthScale = Math.max(0.08, (placement.depth / shelf.depth_cm) * shelfSize.depth);
+        const localX = ((placement.x + placement.width / 2) / shelf.width_cm - 0.5) * shelfSize.width;
+        const localZ = ((placement.y + placement.depth / 2) / shelf.depth_cm - 0.5) * shelfSize.depth;
 
         dummy.position.set(x + localX, baseY, z + localZ);
         dummy.scale.set(widthScale, payload.layout.placement_height, depthScale);
@@ -505,6 +564,10 @@ def render_three_html(payload: dict, placement_color: str = "27ae60") -> str:
           order_id: placement.order_id,
           company: placement.company,
           ship_date: placement.ship_date,
+          due_date: placement.due_date,
+          entry_date: placement.entry_date,
+          destination: placement.destination,
+          max_storage_days: placement.max_storage_days,
           rotated: placement.rotated,
           utilization: shelf.utilization,
         }});
@@ -543,11 +606,12 @@ def render_three_html(payload: dict, placement_color: str = "27ae60") -> str:
     let ui = 0;
     const uprightColor = new THREE.Color(0x8fa8b8);
     uniqueRows.forEach(shelf => {{
-      const x = (shelf.aisle_index - 1) * L.aisle_pitch;
-      const z = (shelf.row_index - 1) * L.row_pitch + (shelf.side_index === 1 ? -L.side_gap : L.side_gap);
+      const x = (shelf.aisle_index - 1) * P.aisle_pitch;
+      const z = (shelf.row_index - 1) * P.row_pitch + (shelf.side_index === 1 ? -P.side_gap : P.side_gap);
+      const shelfSize = shelfRenderSize(shelf);
       const baseY = uprightH / 2 - 0.45;
       [-1, 1].forEach(side => {{
-        dummy.position.set(x + side * (L.shelf_width * 0.5 - uprightW * 0.5), baseY, z);
+        dummy.position.set(x + side * (shelfSize.width * 0.5 - uprightW * 0.5), baseY, z);
         dummy.scale.set(uprightW, uprightH, uprightW);
         dummy.updateMatrix();
         uprightMesh.setMatrixAt(ui, dummy.matrix);
@@ -589,6 +653,7 @@ def render_three_html(payload: dict, placement_color: str = "27ae60") -> str:
       <strong>Raf:</strong> ${{shelf.shelf_id}}<br />
       <strong>Raf tipi:</strong> ${{shelf.shelf_type}}<br />
       <strong>Koridor / Taraf / Sıra / Y:</strong> ${{shelf.aisle_index}} / ${{shelf.side_index}} / ${{shelf.row_index}} / ${{shelf.y_index}}<br />
+      <strong>Boyut:</strong> ${{shelf.width_cm}}×${{shelf.depth_cm}}×${{shelf.height_cm}} cm<br />
       <strong>Doluluk:</strong> ${{(shelf.utilization * 100).toFixed(1)}}%<br />
       <strong>Sipariş:</strong> ${{shelf.placement_count}}<br />
       <strong>Manuel dolu:</strong> ${{shelf.manual_full ? 'Evet' : 'Hayır'}}
@@ -599,7 +664,10 @@ def render_three_html(payload: dict, placement_color: str = "27ae60") -> str:
     return `
       <strong>Sipariş:</strong> ${{entry.order_id}}<br />
       <strong>Firma:</strong> ${{entry.company}}<br />
+      <strong>Hedef:</strong> ${{entry.destination || '-'}}<br />
+      <strong>Termin:</strong> ${{entry.due_date || entry.ship_date}}<br />
       <strong>Sevk tarihi:</strong> ${{entry.ship_date}}<br />
+      <strong>Giriş tarihi:</strong> ${{entry.entry_date || '-'}}<br />
       <strong>Raf:</strong> ${{entry.shelf_id}}<br />
       <strong>Döndürülmüş:</strong> ${{entry.rotated ? 'Evet' : 'Hayır'}}
     `;
@@ -659,7 +727,10 @@ def render_three_html(payload: dict, placement_color: str = "27ae60") -> str:
           ${{shelf.placements.map(p => `
             <div class="panel-placement">
               <div style="font-weight:600;margin-bottom:2px">${{p.order_id}}</div>
-              <div style="color:rgba(239,244,255,0.7);font-size:12px">${{p.company}} — ${{p.ship_date}}</div>
+              <div style="color:rgba(239,244,255,0.7);font-size:12px">${{p.company}} — ${{p.destination || '-'}}</div>
+              <div style="color:rgba(239,244,255,0.55);font-size:11px;margin-top:2px">
+                Termin ${{p.due_date || p.ship_date}} · Giriş ${{p.entry_date || '-'}} · Sevk ${{p.ship_date}}
+              </div>
               <div style="color:rgba(239,244,255,0.45);font-size:11px;margin-top:2px">
                 ${{p.width}}×${{p.depth}} cm${{p.rotated ? ' · döndürülmüş' : ''}}
               </div>
@@ -690,7 +761,7 @@ def render_three_html(payload: dict, placement_color: str = "27ae60") -> str:
         </div>
         <div class="panel-stat">
           <div class="panel-stat-label">Boyut (cm)</div>
-          <div class="panel-stat-value" style="font-size:14px">${{shelf.width_cm}}×${{shelf.depth_cm}}</div>
+          <div class="panel-stat-value" style="font-size:13px">${{shelf.width_cm}}×${{shelf.depth_cm}}×${{shelf.height_cm}}</div>
         </div>
       </div>
       ${{placementsHtml}}

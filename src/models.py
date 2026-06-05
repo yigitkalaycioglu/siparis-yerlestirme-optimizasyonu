@@ -21,6 +21,25 @@ class WarehouseConfig:
 
 
 @dataclass
+class ShelfTypeConfig:
+    label: str
+    shelf_width_cm: int = 360
+    shelf_depth_cm: int = 250
+    shelf_height_cm: int = 220
+    clearance_width_cm: int = 1
+    clearance_depth_cm: int = 1
+    smallest_pallet_width_cm: int = 80
+    smallest_pallet_depth_cm: int = 120
+
+
+@dataclass
+class ShelfTypeLayout:
+    label: str
+    sequence: int = 1
+    block_size: int = 1
+
+
+@dataclass
 class AlgorithmConfig:
     allow_rotation: bool = True
     cluster_same_company: bool = True
@@ -102,6 +121,7 @@ class ShelfState:
     width_cm: int
     depth_cm: int
     free_rectangles: list[Rect]
+    shelf_type: str = "Standart"
     placements: list[Placement] = field(default_factory=list)
     manual_full: bool = False
 
@@ -129,8 +149,47 @@ class AppState:
     warehouse_config: WarehouseConfig
     algorithm_config: AlgorithmConfig
     shelves: list[ShelfState]
+    shelf_types: list[str] = field(default_factory=list)
+    shelf_type_configs: dict[str, ShelfTypeConfig] = field(default_factory=dict)
+    shelf_type_layouts: list[ShelfTypeLayout] = field(default_factory=list)
     package_presets: list[PackagePreset] = field(default_factory=list)
     orders: list[Order] = field(default_factory=list)
+
+
+def make_shelf_type_config(label: str, warehouse_config: WarehouseConfig, data: dict[str, Any] | None = None) -> ShelfTypeConfig:
+    payload = data or {}
+    return ShelfTypeConfig(
+        label=label,
+        shelf_width_cm=int(payload.get("shelf_width_cm", warehouse_config.shelf_width_cm)),
+        shelf_depth_cm=int(payload.get("shelf_depth_cm", warehouse_config.shelf_depth_cm)),
+        shelf_height_cm=int(payload.get("shelf_height_cm", warehouse_config.shelf_height_cm)),
+        clearance_width_cm=int(payload.get("clearance_width_cm", warehouse_config.clearance_width_cm)),
+        clearance_depth_cm=int(payload.get("clearance_depth_cm", warehouse_config.clearance_depth_cm)),
+        smallest_pallet_width_cm=int(payload.get("smallest_pallet_width_cm", warehouse_config.smallest_pallet_width_cm)),
+        smallest_pallet_depth_cm=int(payload.get("smallest_pallet_depth_cm", warehouse_config.smallest_pallet_depth_cm)),
+    )
+
+
+def make_shelf_type_layout(label: str, data: dict[str, Any] | None = None) -> ShelfTypeLayout:
+    payload = data or {}
+    return ShelfTypeLayout(
+        label=label,
+        sequence=int(payload.get("sequence", 1)),
+        block_size=max(1, int(payload.get("block_size", 1))),
+    )
+
+
+def _normalize_shelf_type_layouts(raw_layouts: Any) -> dict[str, dict[str, Any]]:
+    if isinstance(raw_layouts, dict):
+        return {str(label): dict(payload or {}) for label, payload in raw_layouts.items()}
+
+    normalized: dict[str, dict[str, Any]] = {}
+    if isinstance(raw_layouts, list):
+        for index, item in enumerate(raw_layouts):
+            if isinstance(item, dict):
+                label = str(item.get("label") or item.get("shelf_type") or f"Layout-{index + 1}")
+                normalized[label] = dict(item)
+    return normalized
 
 
 def parse_ship_date(value: str) -> date:
@@ -145,11 +204,34 @@ def from_dict(data: dict[str, Any]) -> AppState:
     warehouse_config = WarehouseConfig(**data.get("warehouse_config", {}))
     algorithm_config = AlgorithmConfig(**data.get("algorithm_config", {}))
     package_presets = [PackagePreset(**preset_data) for preset_data in data.get("package_presets", [])]
+    shelf_types = list(data.get("shelf_types", [])) or ["Standart"]
+    raw_shelf_type_configs = data.get("shelf_type_configs", {}) or {}
+    raw_shelf_type_layouts = _normalize_shelf_type_layouts(data.get("shelf_type_layouts", {}))
+
+    shelf_type_configs = {
+        shelf_type: make_shelf_type_config(shelf_type, warehouse_config, raw_shelf_type_configs.get(shelf_type, {}))
+        for shelf_type in shelf_types
+    }
+
+    for shelf_type, config_data in raw_shelf_type_configs.items():
+        if shelf_type not in shelf_type_configs:
+            shelf_type_configs[shelf_type] = make_shelf_type_config(shelf_type, warehouse_config, config_data)
+
+    shelf_type_layouts = [
+        make_shelf_type_layout(shelf_type, raw_shelf_type_layouts.get(shelf_type, {}))
+        for shelf_type in shelf_types
+    ]
+    layout_known = {layout.label for layout in shelf_type_layouts}
+    for shelf_type, layout_data in raw_shelf_type_layouts.items():
+        if shelf_type not in layout_known:
+            shelf_type_layouts.append(make_shelf_type_layout(shelf_type, layout_data))
+    shelf_type_layouts.sort(key=lambda layout: (layout.sequence, layout.label.lower()))
 
     shelves: list[ShelfState] = []
-    for item in data.get("shelves", []):
+    for index, item in enumerate(data.get("shelves", [])):
         free_rectangles = [Rect(**r) for r in item.get("free_rectangles", [])]
         placements = [Placement(**p) for p in item.get("placements", [])]
+        shelf_type = str(item.get("shelf_type") or shelf_types[index % len(shelf_types)]).strip() or shelf_types[0]
         shelves.append(
             ShelfState(
                 shelf_id=item["shelf_id"],
@@ -159,6 +241,7 @@ def from_dict(data: dict[str, Any]) -> AppState:
                 y_index=item["y_index"],
                 width_cm=item["width_cm"],
                 depth_cm=item["depth_cm"],
+                shelf_type=shelf_type,
                 free_rectangles=free_rectangles,
                 placements=placements,
                 manual_full=item.get("manual_full", False),
@@ -171,6 +254,9 @@ def from_dict(data: dict[str, Any]) -> AppState:
         warehouse_config=warehouse_config,
         algorithm_config=algorithm_config,
         shelves=shelves,
+        shelf_types=shelf_types,
+        shelf_type_configs=shelf_type_configs,
+        shelf_type_layouts=shelf_type_layouts,
         package_presets=package_presets,
         orders=orders,
     )

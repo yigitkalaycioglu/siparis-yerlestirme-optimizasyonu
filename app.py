@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+from html import escape
 from datetime import date
 from uuid import uuid4
 
 import streamlit as st
-import streamlit.components.v1 as components
 
 from src.engine import (
     apply_new_configs,
+    apply_shelf_type_config,
     clear_all_shelves,
     clear_shelf,
     mark_shelf_manual_full,
@@ -15,7 +16,16 @@ from src.engine import (
     place_order_on_shelf,
     suggest_shelves_for_order,
 )
-from src.models import AlgorithmConfig, Order, PackagePreset, WarehouseConfig
+from src.models import (
+    AlgorithmConfig,
+    Order,
+    PackagePreset,
+    ShelfTypeConfig,
+    ShelfTypeLayout,
+    WarehouseConfig,
+    make_shelf_type_config,
+    make_shelf_type_layout,
+)
 from src.storage import load_state, save_state
 from src.visualization import build_scene_payload, render_three_html
 
@@ -89,6 +99,12 @@ if "new_package_preset_label" not in st.session_state:
     st.session_state.new_package_preset_label = ""
 if "new_package_preset_label_pending_reset" not in st.session_state:
     st.session_state.new_package_preset_label_pending_reset = False
+if "new_shelf_type_label" not in st.session_state:
+    st.session_state.new_shelf_type_label = ""
+if "new_shelf_type_label_pending_reset" not in st.session_state:
+    st.session_state.new_shelf_type_label_pending_reset = False
+if "order_shelf_type_preference" not in st.session_state:
+    st.session_state.order_shelf_type_preference = "Tümü"
 if "order_order_id" not in st.session_state:
     st.session_state.order_order_id = f"ORD-{uuid4().hex[:8].upper()}"
 if "order_product_width_cm" not in st.session_state:
@@ -125,6 +141,37 @@ if _shelf_from_url:
     st.rerun()
 
 state = st.session_state.state
+if not state.shelf_types:
+    state.shelf_types = ["Standart"]
+    st.session_state.state = state
+    save_state(state)
+
+state_dirty = False
+for shelf_type in state.shelf_types:
+    if shelf_type not in state.shelf_type_configs:
+        state.shelf_type_configs[shelf_type] = make_shelf_type_config(shelf_type, state.warehouse_config)
+        state_dirty = True
+    if not any(layout.label == shelf_type for layout in state.shelf_type_layouts):
+        state.shelf_type_layouts.append(make_shelf_type_layout(shelf_type))
+        state_dirty = True
+
+state.shelf_type_layouts.sort(key=lambda layout: (layout.sequence, layout.label.lower()))
+
+if state_dirty:
+    st.session_state.state = state
+    save_state(state)
+
+shelf_type_layout_options = sorted(state.shelf_type_layouts, key=lambda layout: (layout.sequence, layout.label.lower()))
+shelf_type_options = [layout.label for layout in shelf_type_layout_options] or (state.shelf_types or ["Standart"])
+current_order_type = st.session_state.get("order_shelf_type_preference", "Tümü")
+if current_order_type != "Tümü" and current_order_type not in shelf_type_options:
+    st.session_state.order_shelf_type_preference = "Tümü"
+
+current_visible_types = st.session_state.get("view3d_visible_shelf_types", shelf_type_options)
+if isinstance(current_visible_types, list):
+    cleaned_visible_types = [shelf_type for shelf_type in current_visible_types if shelf_type in shelf_type_options]
+    if cleaned_visible_types != current_visible_types:
+        st.session_state.view3d_visible_shelf_types = cleaned_visible_types or list(shelf_type_options)
 
 # ── Sidebar: Sadece fabrika parametreleri ──────────────────────────────────
 with st.sidebar:
@@ -259,6 +306,217 @@ with st.sidebar:
         save_state(state)
         st.success("Parametreler kaydedildi.")
 
+    st.markdown("---")
+    st.subheader("Raf Tipleri ve Düzeni")
+    st.caption("Aynı bölümde raf tipi parametrelerini, depodaki sıralarını ve blok uzunluklarını yönetebilirsiniz.")
+
+    if st.session_state.new_shelf_type_label_pending_reset:
+        st.session_state.new_shelf_type_label = ""
+        st.session_state.new_shelf_type_label_pending_reset = False
+
+    selected_shelf_type = st.selectbox(
+        "Düzenlenecek raf tipi",
+        options=shelf_type_options,
+        key="shelf_type_config_choice",
+    )
+    selected_shelf_type_config = state.shelf_type_configs.get(
+        selected_shelf_type,
+        make_shelf_type_config(selected_shelf_type, state.warehouse_config),
+    )
+
+    selected_shelf_layout = next(
+        (layout for layout in state.shelf_type_layouts if layout.label == selected_shelf_type),
+        make_shelf_type_layout(selected_shelf_type),
+    )
+
+    with st.form("shelf_type_config_form"):
+        layout_col1, layout_col2 = st.columns(2)
+        with layout_col1:
+            sequence = st.number_input(
+                "Depodaki sıra",
+                min_value=1,
+                value=int(selected_shelf_layout.sequence),
+                key=f"shelf_type_{selected_shelf_type}_sequence",
+            )
+        with layout_col2:
+            block_size = st.number_input(
+                "Ardışık raf bloğu",
+                min_value=1,
+                value=int(selected_shelf_layout.block_size),
+                key=f"shelf_type_{selected_shelf_type}_block_size",
+            )
+
+        st.markdown("##### Tip Ölçüleri")
+        shelf_width_cm = st.number_input(
+            "Raf genişliği",
+            min_value=10,
+            value=selected_shelf_type_config.shelf_width_cm,
+            key=f"shelf_type_{selected_shelf_type}_shelf_width_cm",
+        )
+        shelf_depth_cm = st.number_input(
+            "Raf derinliği",
+            min_value=10,
+            value=selected_shelf_type_config.shelf_depth_cm,
+            key=f"shelf_type_{selected_shelf_type}_shelf_depth_cm",
+        )
+        shelf_height_cm = st.number_input(
+            "Raf yüksekliği",
+            min_value=10,
+            value=selected_shelf_type_config.shelf_height_cm,
+            key=f"shelf_type_{selected_shelf_type}_shelf_height_cm",
+        )
+
+        st.markdown("##### Tip Boşlukları")
+        clearance_width_cm = st.number_input(
+            "Genişlik güvenlik payı",
+            min_value=0,
+            value=selected_shelf_type_config.clearance_width_cm,
+            key=f"shelf_type_{selected_shelf_type}_clearance_width_cm",
+        )
+        clearance_depth_cm = st.number_input(
+            "Derinlik güvenlik payı",
+            min_value=0,
+            value=selected_shelf_type_config.clearance_depth_cm,
+            key=f"shelf_type_{selected_shelf_type}_clearance_depth_cm",
+        )
+        smallest_pallet_width_cm = st.number_input(
+            "Min palet genişliği",
+            min_value=1,
+            value=selected_shelf_type_config.smallest_pallet_width_cm,
+            key=f"shelf_type_{selected_shelf_type}_smallest_pallet_width_cm",
+        )
+        smallest_pallet_depth_cm = st.number_input(
+            "Min palet derinliği",
+            min_value=1,
+            value=selected_shelf_type_config.smallest_pallet_depth_cm,
+            key=f"shelf_type_{selected_shelf_type}_smallest_pallet_depth_cm",
+        )
+
+        save_shelf_type_config = st.form_submit_button("Raf Tipi Düzenini Kaydet")
+
+    if save_shelf_type_config:
+        new_shelf_type_config = ShelfTypeConfig(
+            label=selected_shelf_type,
+            shelf_width_cm=int(shelf_width_cm),
+            shelf_depth_cm=int(shelf_depth_cm),
+            shelf_height_cm=int(shelf_height_cm),
+            clearance_width_cm=int(clearance_width_cm),
+            clearance_depth_cm=int(clearance_depth_cm),
+            smallest_pallet_width_cm=int(smallest_pallet_width_cm),
+            smallest_pallet_depth_cm=int(smallest_pallet_depth_cm),
+        )
+        layout_ok = True
+        affected_shelves = [shelf for shelf in state.shelves if shelf.shelf_type == selected_shelf_type]
+        if any(shelf.placements or shelf.manual_full for shelf in affected_shelves):
+            layout_ok = False
+            st.error("Bu raf tipinde dolu ya da manuel işaretli raflar var. Önce onları boşaltın.")
+        else:
+            ok, message = apply_shelf_type_config(state, selected_shelf_type, new_shelf_type_config)
+            if ok:
+                existing_layout = next((layout for layout in state.shelf_type_layouts if layout.label == selected_shelf_type), None)
+                if existing_layout is None:
+                    state.shelf_type_layouts.append(
+                        ShelfTypeLayout(label=selected_shelf_type, sequence=int(sequence), block_size=int(block_size))
+                    )
+                else:
+                    existing_layout.sequence = int(sequence)
+                    existing_layout.block_size = int(block_size)
+                state.shelf_type_layouts.sort(key=lambda layout: (layout.sequence, layout.label.lower()))
+                st.session_state.state = state
+                save_state(state)
+                st.success(message)
+                st.rerun()
+            else:
+                layout_ok = False
+                st.error(message)
+
+    add_col, help_col = st.columns([2, 3])
+    with add_col:
+        new_shelf_type = st.text_input(
+            "Yeni raf tipi adı",
+            key="new_shelf_type_label",
+            placeholder="Örn. Ağır Yük Rafı",
+        )
+        add_shelf_type = st.button("Raf Tipini Ekle", key="add_shelf_type")
+    with help_col:
+        st.caption("Yeni tip, seçili raf tipinin düzeniyle eklenir; sonra sırasını ve blok uzunluğunu değiştirebilirsiniz.")
+
+    if add_shelf_type:
+        normalized_type = new_shelf_type.strip()
+        existing_types = {s.strip().lower() for s in state.shelf_types}
+        if not normalized_type:
+            st.error("Raf tipi adı boş olamaz.")
+        elif normalized_type.lower() in existing_types:
+            st.error("Bu raf tipi zaten kayıtlı.")
+        else:
+            source_config = state.shelf_type_configs.get(
+                st.session_state.get("shelf_type_config_choice", shelf_type_options[0]),
+                make_shelf_type_config(shelf_type_options[0], state.warehouse_config),
+            )
+            source_layout = next(
+                (layout for layout in state.shelf_type_layouts if layout.label == st.session_state.get("shelf_type_config_choice", shelf_type_options[0])),
+                make_shelf_type_layout(shelf_type_options[0]),
+            )
+            state.shelf_types.append(normalized_type)
+            state.shelf_type_configs[normalized_type] = ShelfTypeConfig(
+                label=normalized_type,
+                shelf_width_cm=source_config.shelf_width_cm,
+                shelf_depth_cm=source_config.shelf_depth_cm,
+                shelf_height_cm=source_config.shelf_height_cm,
+                clearance_width_cm=source_config.clearance_width_cm,
+                clearance_depth_cm=source_config.clearance_depth_cm,
+                smallest_pallet_width_cm=source_config.smallest_pallet_width_cm,
+                smallest_pallet_depth_cm=source_config.smallest_pallet_depth_cm,
+            )
+            state.shelf_type_layouts.append(
+                ShelfTypeLayout(
+                    label=normalized_type,
+                    sequence=max(layout.sequence for layout in state.shelf_type_layouts) + 1 if state.shelf_type_layouts else 1,
+                    block_size=source_layout.block_size,
+                )
+            )
+            state.shelf_type_layouts.sort(key=lambda layout: (layout.sequence, layout.label.lower()))
+            st.session_state.state = state
+            save_state(state)
+            st.session_state.new_shelf_type_label_pending_reset = True
+            st.success(f'"{normalized_type}" raf tipi eklendi.')
+            st.rerun()
+
+    st.markdown("##### Kayıtlı Raf Tipleri")
+    if state.shelf_types:
+        for index, shelf_type in enumerate(shelf_type_options):
+            layout = next((item for item in state.shelf_type_layouts if item.label == shelf_type), make_shelf_type_layout(shelf_type))
+            type_col, seq_col, block_col, count_col, delete_col = st.columns([3, 1, 1, 1, 1])
+            with type_col:
+                st.write(shelf_type)
+            with seq_col:
+                st.caption(f"Sıra: {layout.sequence}")
+            with block_col:
+                st.caption(f"Blok: {layout.block_size}")
+            with count_col:
+                assigned_count = sum(1 for shelf in state.shelves if shelf.shelf_type == shelf_type)
+                st.caption(f"{assigned_count}")
+            with delete_col:
+                if st.button("✕", key=f"delete_shelf_type_{index}", help=f"{shelf_type} tipini sil"):
+                    if len(state.shelf_types) == 1:
+                        st.error("En az bir raf tipi bırakmalısınız.")
+                    else:
+                        removed_type = shelf_type
+                        state.shelf_types = [item for item in state.shelf_types if item != removed_type]
+                        state.shelf_type_configs.pop(removed_type, None)
+                        state.shelf_type_layouts = [layout_item for layout_item in state.shelf_type_layouts if layout_item.label != removed_type]
+                        fallback_type = state.shelf_types[0] if state.shelf_types else "Standart"
+                        for shelf in state.shelves:
+                            if shelf.shelf_type == removed_type:
+                                shelf.shelf_type = fallback_type
+                        state.shelf_type_layouts.sort(key=lambda item: (item.sequence, item.label.lower()))
+                        st.session_state.state = state
+                        save_state(state)
+                        st.success(f'"{removed_type}" raf tipi silindi.')
+                        st.rerun()
+    else:
+        st.caption("Henüz raf tipi eklenmedi.")
+
 # ── Üst özet metrikleri ───────────────────────────────────────────────────
 col_a, col_b, col_c, col_d = st.columns(4)
 with col_a:
@@ -342,6 +600,12 @@ if view == "Sipariş Yerleştir":
         pallet_depth_cm = st.number_input("Palet derinliği (cm)", min_value=1, key="order_pallet_depth_cm")
     company = st.text_input("Firma", key="order_company")
     ship_date = st.date_input("Sevk tarihi", key="order_ship_date")
+    preferred_shelf_type = st.selectbox(
+        "Raf tipi tercihi",
+        options=["Tümü"] + shelf_type_options,
+        key="order_shelf_type_preference",
+    )
+    allowed_shelf_types = None if preferred_shelf_type == "Tümü" else {preferred_shelf_type}
 
     if selected_preset_label == "Yeni Ekle +":
         with st.container(border=True):
@@ -389,7 +653,7 @@ if view == "Sipariş Yerleştir":
             ship_date=ship_date.strftime("%Y-%m-%d"),
         )
 
-        suggestions = suggest_shelves_for_order(state, order)
+        suggestions = suggest_shelves_for_order(state, order, allowed_shelf_types=allowed_shelf_types)
         if not suggestions:
             st.error(
                 "Bu sipariş için uygun raf bulunamadı. "
@@ -500,7 +764,7 @@ if view == "Sipariş Yerleştir":
                 results: list[dict] = []
                 placed = 0
                 for o in parsed_orders:
-                    suggestions = suggest_shelves_for_order(state, o)
+                    suggestions = suggest_shelves_for_order(state, o, allowed_shelf_types=allowed_shelf_types)
                     if not suggestions:
                         results.append({"order_id": o.order_id, "status": "Öneri yok"})
                         continue
@@ -520,7 +784,7 @@ if view == "Sipariş Yerleştir":
             st.write("Her sipariş için öneriler ve manuel yerleştirme düğmeleri")
             for o in parsed_orders:
                 st.markdown(f"**Sipariş:** {o.order_id} — Firma: {o.company} — Sevk: {o.ship_date}")
-                suggestions = suggest_shelves_for_order(state, o)
+                suggestions = suggest_shelves_for_order(state, o, allowed_shelf_types=allowed_shelf_types)
                 if not suggestions:
                     st.warning("Bu sipariş için öneri bulunamadı.")
                     continue
@@ -546,6 +810,7 @@ if view == "Sipariş Yerleştir":
 elif view == "3B Görünüm":
     aisle_options = list(range(1, state.warehouse_config.aisles + 1))
     level_max = state.warehouse_config.shelves_per_row
+    visible_shelf_type_options = shelf_type_options
 
     # Filtreler – sekme içinde
     with st.expander("Filtreler ve Görüntü Ayarları", expanded=False):
@@ -592,6 +857,27 @@ elif view == "3B Görünüm":
             )
             st.session_state.view3d_color = raw_color
 
+        ft1, ft2 = st.columns([2, 1])
+        with ft1:
+            selected_shelf_types = st.multiselect(
+                "Gösterilecek raf tipleri",
+                options=visible_shelf_type_options,
+                default=visible_shelf_type_options,
+                key="view3d_visible_shelf_types",
+            )
+        with ft2:
+            st.caption(f"{len(selected_shelf_types)} / {len(visible_shelf_type_options)} tip görünür")
+
+        type_rows = [
+            {
+                "raf_tipi": shelf_type,
+                "raf_sayisi": sum(1 for shelf in state.shelves if shelf.shelf_type == shelf_type),
+                "gosteriliyor": shelf_type in selected_shelf_types,
+            }
+            for shelf_type in visible_shelf_type_options
+        ]
+        st.dataframe(type_rows, width="stretch", hide_index=True)
+
     filtered_aisles = selected_aisles or aisle_options
     placement_color = (raw_color or "#27ae60").lstrip("#")
 
@@ -603,9 +889,23 @@ elif view == "3B Görünüm":
         show_only_occupied=show_only_occupied,
         show_placements=show_placements,
         highlight_shelf_id=st.session_state.shelf_mgmt_override or None,
+        visible_shelf_types=selected_shelf_types,
     )
 
-    components.html(render_three_html(payload, placement_color), height=720, scrolling=False)
+    iframe_html = f"""
+    <iframe
+      srcdoc="{escape(render_three_html(payload, placement_color), quote=True)}"
+      style="width: 100%; height: 720px; border: 0; border-radius: 12px; overflow: hidden;"
+      sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+    ></iframe>
+    """
+    if hasattr(st, "html"):
+        try:
+            st.html(iframe_html, unsafe_allow_javascript=True)
+        except TypeError:
+            st.html(iframe_html)
+    else:
+        st.markdown(iframe_html, unsafe_allow_html=True)
 
     # Seçili raf işlem paneli (3B'den gelen tıklama veya manuel seçim)
     selected_id = st.session_state.shelf_mgmt_override
@@ -786,6 +1086,24 @@ elif view == "Raf Yönetimi":
                 st.metric("Toplam Alan", f"{selected_state.area:,} cm²")
             with m4:
                 st.metric("Manuel Dolu", "Evet" if selected_state.manual_full else "Hayır")
+
+            shelf_type_options_for_edit = (
+                shelf_type_options if selected_state.shelf_type in shelf_type_options else [selected_state.shelf_type] + shelf_type_options
+            )
+            shelf_type_widget_key = f"shelf_type_{selected_shelf}"
+            if st.session_state.get(shelf_type_widget_key) not in shelf_type_options_for_edit:
+                st.session_state[shelf_type_widget_key] = selected_state.shelf_type
+            selected_type = st.selectbox(
+                "Raf tipi",
+                options=shelf_type_options_for_edit,
+                index=shelf_type_options_for_edit.index(selected_state.shelf_type),
+                key=shelf_type_widget_key,
+            )
+            if selected_type != selected_state.shelf_type:
+                selected_state.shelf_type = selected_type
+                save_state(state)
+                st.success(f"{selected_state.shelf_id} raf tipi {selected_type} olarak güncellendi.")
+                st.rerun()
 
             if selected_state.placements:
                 with st.expander(f"Yerleşik Siparişler ({len(selected_state.placements)})", expanded=True):

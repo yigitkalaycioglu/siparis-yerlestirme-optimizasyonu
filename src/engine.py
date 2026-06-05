@@ -11,7 +11,11 @@ from src.models import (
     Placement,
     Rect,
     ShelfState,
+    ShelfTypeConfig,
+    ShelfTypeLayout,
     WarehouseConfig,
+    make_shelf_type_config,
+    make_shelf_type_layout,
     parse_ship_date,
 )
 
@@ -20,12 +24,41 @@ def generate_shelf_id(aisle: int, side: int, row: int, y_index: int) -> str:
     return f"A{aisle:02d}-S{side:02d}-R{row:03d}-Y{y_index:02d}"
 
 
-def build_empty_shelves(config: WarehouseConfig) -> list[ShelfState]:
+def build_empty_shelves(
+    config: WarehouseConfig,
+    shelf_types: list[str] | None = None,
+    shelf_type_configs: dict[str, ShelfTypeConfig] | None = None,
+    shelf_type_layouts: list[ShelfTypeLayout] | None = None,
+) -> list[ShelfState]:
     shelves: list[ShelfState] = []
+    shelf_type_list = [s for s in (shelf_types or ["Standart"]) if s.strip()] or ["Standart"]
+    resolved_shelf_type_configs = {
+        shelf_type: shelf_type_configs.get(shelf_type)
+        if shelf_type_configs and shelf_type in shelf_type_configs
+        else make_shelf_type_config(shelf_type, config)
+        for shelf_type in shelf_type_list
+    }
+    resolved_layouts = {layout.label: layout for layout in (shelf_type_layouts or [])}
+    ordered_shelf_types = sorted(
+        shelf_type_list,
+        key=lambda shelf_type: (
+            resolved_layouts.get(shelf_type, make_shelf_type_layout(shelf_type)).sequence,
+            shelf_type.lower(),
+        ),
+    )
+    shelf_pattern: list[str] = []
+    for shelf_type in ordered_shelf_types:
+        block_size = resolved_layouts.get(shelf_type, make_shelf_type_layout(shelf_type)).block_size
+        shelf_pattern.extend([shelf_type] * block_size)
+    if not shelf_pattern:
+        shelf_pattern = ordered_shelf_types or ["Standart"]
+    shelf_index = 0
     for aisle in range(1, config.aisles + 1):
         for side in range(1, config.sides_per_aisle + 1):
             for row in range(1, config.rows_per_side + 1):
                 for y_index in range(1, config.shelves_per_row + 1):
+                    shelf_type = shelf_pattern[shelf_index % len(shelf_pattern)]
+                    shelf_config = resolved_shelf_type_configs[shelf_type]
                     shelves.append(
                         ShelfState(
                             shelf_id=generate_shelf_id(aisle, side, row, y_index),
@@ -33,29 +66,58 @@ def build_empty_shelves(config: WarehouseConfig) -> list[ShelfState]:
                             side_index=side,
                             row_index=row,
                             y_index=y_index,
-                            width_cm=config.shelf_width_cm,
-                            depth_cm=config.shelf_depth_cm,
+                            width_cm=shelf_config.shelf_width_cm,
+                            depth_cm=shelf_config.shelf_depth_cm,
+                            shelf_type=shelf_type,
                             free_rectangles=[
                                 Rect(
                                     x=0,
                                     y=0,
-                                    width=config.shelf_width_cm,
-                                    depth=config.shelf_depth_cm,
+                                    width=shelf_config.shelf_width_cm,
+                                    depth=shelf_config.shelf_depth_cm,
                                 )
                             ],
                         )
                     )
+                    shelf_index += 1
     return shelves
 
 
 def create_initial_state(
-    warehouse_config: WarehouseConfig, algorithm_config: AlgorithmConfig
+    warehouse_config: WarehouseConfig, algorithm_config: AlgorithmConfig, shelf_types: list[str] | None = None
 ) -> AppState:
+    resolved_shelf_types = [s for s in (shelf_types or ["Standart"]) if s.strip()] or ["Standart"]
     return AppState(
         warehouse_config=warehouse_config,
         algorithm_config=algorithm_config,
-        shelves=build_empty_shelves(warehouse_config),
+        shelves=build_empty_shelves(warehouse_config, resolved_shelf_types),
+        shelf_types=resolved_shelf_types,
+        shelf_type_configs={shelf_type: make_shelf_type_config(shelf_type, warehouse_config) for shelf_type in resolved_shelf_types},
+        shelf_type_layouts=[make_shelf_type_layout(shelf_type) for shelf_type in resolved_shelf_types],
     )
+
+
+def apply_shelf_type_config(state: AppState, shelf_type: str, new_config: ShelfTypeConfig) -> tuple[bool, str]:
+    affected_shelves = [shelf for shelf in state.shelves if shelf.shelf_type == shelf_type]
+    if any(shelf.placements or shelf.manual_full for shelf in affected_shelves):
+        return False, "Bu raf tipinde dolu ya da manuel işaretli raflar var. Önce onları boşaltın."
+
+    state.shelf_type_configs[shelf_type] = make_shelf_type_config(shelf_type, state.warehouse_config, {
+        "shelf_width_cm": new_config.shelf_width_cm,
+        "shelf_depth_cm": new_config.shelf_depth_cm,
+        "shelf_height_cm": new_config.shelf_height_cm,
+        "clearance_width_cm": new_config.clearance_width_cm,
+        "clearance_depth_cm": new_config.clearance_depth_cm,
+        "smallest_pallet_width_cm": new_config.smallest_pallet_width_cm,
+        "smallest_pallet_depth_cm": new_config.smallest_pallet_depth_cm,
+    })
+
+    for shelf in affected_shelves:
+        shelf.width_cm = new_config.shelf_width_cm
+        shelf.depth_cm = new_config.shelf_depth_cm
+        shelf.free_rectangles = [Rect(x=0, y=0, width=new_config.shelf_width_cm, depth=new_config.shelf_depth_cm)]
+
+    return True, f'"{shelf_type}" raf tipi parametreleri güncellendi.'
 
 
 def _is_contained(inner: Rect, outer: Rect) -> bool:
@@ -123,7 +185,11 @@ def _smallest_pallet_capacity_hint(config: WarehouseConfig) -> int:
     return (config.shelf_width_cm * config.shelf_depth_cm) // smallest_area
 
 
-def suggest_shelves_for_order(state: AppState, order: Order) -> list[dict[str, Any]]:
+def suggest_shelves_for_order(
+    state: AppState,
+    order: Order,
+    allowed_shelf_types: set[str] | None = None,
+) -> list[dict[str, Any]]:
     config = state.warehouse_config
     algo = state.algorithm_config
 
@@ -140,6 +206,8 @@ def suggest_shelves_for_order(state: AppState, order: Order) -> list[dict[str, A
 
     for shelf in state.shelves:
         if shelf.manual_full:
+            continue
+        if allowed_shelf_types is not None and shelf.shelf_type not in allowed_shelf_types:
             continue
 
         best_local_candidate: dict[str, Any] | None = None
@@ -189,6 +257,7 @@ def suggest_shelves_for_order(state: AppState, order: Order) -> list[dict[str, A
 
                 candidate = {
                     "shelf_id": shelf.shelf_id,
+                    "shelf_type": shelf.shelf_type,
                     "score": total_score,
                     "free_rect_index": free_rect_index,
                     "effective_width": effective_w,
@@ -340,7 +409,12 @@ def apply_new_configs(
     state.algorithm_config = replace(new_algorithm)
 
     if rebuild_if_needed or not same_topology:
-        state.shelves = build_empty_shelves(new_warehouse)
+        state.shelves = build_empty_shelves(
+            new_warehouse,
+            state.shelf_types,
+            state.shelf_type_configs,
+            state.shelf_type_layouts,
+        )
         state.orders = []
 
     return state

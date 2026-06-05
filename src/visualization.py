@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from typing import Iterable
 
 from src.models import AppState
@@ -19,91 +20,110 @@ DEFAULT_LAYOUT: dict[str, float] = {
 
 
 def build_scene_payload(
-    state: AppState,
-    *,
-    selected_aisles: Iterable[int] | None = None,
-    level_range: tuple[int, int] | None = None,
-    show_only_occupied: bool = False,
-    show_placements: bool = True,
-    highlight_shelf_id: str | None = None,
+  state: AppState,
+  *,
+  selected_aisles: Iterable[int] | None = None,
+  level_range: tuple[int, int] | None = None,
+  show_only_occupied: bool = False,
+  show_placements: bool = True,
+  highlight_shelf_id: str | None = None,
+  visible_shelf_types: Iterable[str] | None = None,
 ) -> dict:
-    aisle_filter = set(selected_aisles) if selected_aisles else None
-    if level_range is None:
-        min_level, max_level = 1, state.warehouse_config.shelves_per_row
-    else:
-        min_level, max_level = level_range
+  aisle_filter = set(selected_aisles) if selected_aisles else None
+  shelf_type_filter = set(visible_shelf_types) if visible_shelf_types is not None else None
+  if level_range is None:
+    min_level, max_level = 1, state.warehouse_config.shelves_per_row
+  else:
+    min_level, max_level = level_range
 
-    shelves: list[dict] = []
-    rendered_placements = 0
-    occupied_shelves = 0
-    blocked_shelves = 0
+  shelves: list[dict] = []
+  rendered_placements = 0
+  occupied_shelves = 0
+  blocked_shelves = 0
+  type_counts = Counter(shelf.shelf_type for shelf in state.shelves)
+  resolved_types = state.shelf_types or sorted(type_counts.keys()) or ["Standart"]
 
-    for shelf in state.shelves:
-        if aisle_filter is not None and shelf.aisle_index not in aisle_filter:
-            continue
-        if shelf.y_index < min_level or shelf.y_index > max_level:
-            continue
-        if show_only_occupied and not shelf.placements and not shelf.manual_full:
-            continue
+  for shelf in state.shelves:
+    if aisle_filter is not None and shelf.aisle_index not in aisle_filter:
+      continue
+    if shelf.y_index < min_level or shelf.y_index > max_level:
+      continue
+    if (
+      shelf_type_filter is not None
+      and shelf.shelf_type not in shelf_type_filter
+      and shelf.shelf_id != highlight_shelf_id
+    ):
+      continue
+    if show_only_occupied and not shelf.placements and not shelf.manual_full:
+      continue
 
-        is_occupied = bool(shelf.placements)
-        occupied_shelves += int(is_occupied)
-        blocked_shelves += int(shelf.manual_full)
+    is_occupied = bool(shelf.placements)
+    occupied_shelves += int(is_occupied)
+    blocked_shelves += int(shelf.manual_full)
 
-        placements: list[dict] = []
-        if show_placements:
-            for placement in shelf.placements:
-                placements.append(
-                    {
-                        "order_id": placement.order_id,
-                        "company": placement.company,
-                        "ship_date": placement.ship_date,
-                        "x": placement.x,
-                        "y": placement.y,
-                        "width": placement.width,
-                        "depth": placement.depth,
-                        "rotated": placement.rotated,
-                    }
-                )
-            rendered_placements += len(placements)
-
-        shelves.append(
-            {
-                "shelf_id": shelf.shelf_id,
-                "aisle_index": shelf.aisle_index,
-                "side_index": shelf.side_index,
-                "row_index": shelf.row_index,
-                "y_index": shelf.y_index,
-                "width_cm": shelf.width_cm,
-                "depth_cm": shelf.depth_cm,
-                "utilization": shelf.utilization,
-                "manual_full": shelf.manual_full,
-                "placement_count": len(shelf.placements),
-                "placements": placements,
-            }
+    placements: list[dict] = []
+    if show_placements:
+      for placement in shelf.placements:
+        placements.append(
+          {
+            "order_id": placement.order_id,
+            "company": placement.company,
+            "ship_date": placement.ship_date,
+            "x": placement.x,
+            "y": placement.y,
+            "width": placement.width,
+            "depth": placement.depth,
+            "rotated": placement.rotated,
+          }
         )
+      rendered_placements += len(placements)
 
-    return {
-        "warehouse": {
-            "aisles": state.warehouse_config.aisles,
-            "sides_per_aisle": state.warehouse_config.sides_per_aisle,
-            "rows_per_side": state.warehouse_config.rows_per_side,
-            "shelves_per_row": state.warehouse_config.shelves_per_row,
-            "clearance_width_cm": state.warehouse_config.clearance_width_cm,
-            "clearance_depth_cm": state.warehouse_config.clearance_depth_cm,
-        },
-        "layout": dict(DEFAULT_LAYOUT),
-        "stats": {
-            "total_shelves": len(state.shelves),
-            "rendered_shelves": len(shelves),
-            "occupied_shelves": occupied_shelves,
-            "blocked_shelves": blocked_shelves,
-            "rendered_placements": rendered_placements,
-            "orders": len(state.orders),
-        },
-        "highlight_shelf_id": highlight_shelf_id,
-        "shelves": shelves,
-    }
+    shelves.append(
+      {
+        "shelf_id": shelf.shelf_id,
+        "aisle_index": shelf.aisle_index,
+        "side_index": shelf.side_index,
+        "row_index": shelf.row_index,
+        "y_index": shelf.y_index,
+        "width_cm": shelf.width_cm,
+        "depth_cm": shelf.depth_cm,
+        "shelf_type": shelf.shelf_type,
+        "utilization": shelf.utilization,
+        "manual_full": shelf.manual_full,
+        "placement_count": len(shelf.placements),
+        "placements": placements,
+      }
+    )
+
+  return {
+    "warehouse": {
+      "aisles": state.warehouse_config.aisles,
+      "sides_per_aisle": state.warehouse_config.sides_per_aisle,
+      "rows_per_side": state.warehouse_config.rows_per_side,
+      "shelves_per_row": state.warehouse_config.shelves_per_row,
+      "clearance_width_cm": state.warehouse_config.clearance_width_cm,
+      "clearance_depth_cm": state.warehouse_config.clearance_depth_cm,
+    },
+    "layout": dict(DEFAULT_LAYOUT),
+    "stats": {
+      "total_shelves": len(state.shelves),
+      "rendered_shelves": len(shelves),
+      "occupied_shelves": occupied_shelves,
+      "blocked_shelves": blocked_shelves,
+      "rendered_placements": rendered_placements,
+      "orders": len(state.orders),
+    },
+    "shelf_type_summary": [
+      {
+        "type": shelf_type,
+        "count": int(type_counts.get(shelf_type, 0)),
+        "visible": shelf_type_filter is None or shelf_type in shelf_type_filter,
+      }
+      for shelf_type in resolved_types
+    ],
+    "highlight_shelf_id": highlight_shelf_id,
+    "shelves": shelves,
+  }
 
 
 def render_three_html(payload: dict, placement_color: str = "27ae60") -> str:
@@ -179,6 +199,29 @@ def render_three_html(payload: dict, placement_color: str = "27ae60") -> str:
       font-size: 15px;
       margin-top: 2px;
       color: #ffffff;
+    }}
+
+    #type-legend {{
+      margin-top: 10px;
+      display: grid;
+      gap: 6px;
+      font-size: 11px;
+    }}
+
+    .legend-item {{
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 8px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.05);
+    }}
+
+    .legend-swatch {{
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      flex: 0 0 auto;
     }}
 
     #tooltip {{
@@ -266,6 +309,7 @@ def render_three_html(payload: dict, placement_color: str = "27ae60") -> str:
     <p>Fare ile sürükle: döndür · Tekerlek: yakınlaştır · Sağ tuş: kaydır</p>
     <p style="color: rgba(239,244,255,0.6)">Rafa tıklayın → ayrıntı paneli açılır, sayfada işlem yapılabilir.</p>
     <div class="stat-grid" id="stats"></div>
+    <div id="type-legend"></div>
   </div>
   <div id="tooltip">Bir rafın üzerine gelerek detayları görün.</div>
   <div id="shelf-panel">
@@ -288,6 +332,22 @@ def render_three_html(payload: dict, placement_color: str = "27ae60") -> str:
   const stage = document.getElementById('stage');
   const tooltip = document.getElementById('tooltip');
   const stats = document.getElementById('stats');
+  const typeLegend = document.getElementById('type-legend');
+
+  function hashString(value) {{
+    let hash = 0;
+    for (let i = 0; i < value.length; i++) {{
+      hash = ((hash << 5) - hash + value.charCodeAt(i)) | 0;
+    }}
+    return Math.abs(hash);
+  }}
+
+  function typeColor(typeName) {{
+    const hue = hashString(typeName || 'Standart') % 360;
+    const color = new THREE.Color();
+    color.setHSL(hue / 360, 0.42, 0.58);
+    return color;
+  }}
 
   stats.innerHTML = [
     ['Toplam raf', payload.stats.total_shelves],
@@ -302,6 +362,17 @@ def render_three_html(payload: dict, placement_color: str = "27ae60") -> str:
       <strong>${{value}}</strong>
     </div>
   `).join('');
+
+  typeLegend.innerHTML = (payload.shelf_type_summary || []).map((entry) => {{
+    const swatch = typeColor(entry.type).getStyle();
+    return `
+      <div class="legend-item" style="opacity:${{entry.visible ? 1 : 0.45}}">
+        <span class="legend-swatch" style="background:${{swatch}}"></span>
+        <span>${{entry.type}}</span>
+        <strong style="margin-left:auto;color:#fff">${{entry.count}}</strong>
+      </div>
+    `;
+  }}).join('');
 
   const L = payload.layout;
   const W = payload.warehouse;
@@ -410,9 +481,9 @@ def render_three_html(payload: dict, placement_color: str = "27ae60") -> str:
     }} else if (shelf.manual_full) {{
       color.setHex(0xdd3333);
     }} else if (shelf.placement_count > 0) {{
-      color.setHSL(0.12 - Math.min(shelf.utilization, 1) * 0.10, 0.80, 0.55);
+      color.copy(typeColor(shelf.shelf_type)).offsetHSL(0, 0.16, -0.05 + Math.min(shelf.utilization, 1) * 0.06);
     }} else {{
-      color.setHex(0x6b8fa8);
+      color.copy(typeColor(shelf.shelf_type)).offsetHSL(0, -0.05, 0.12);
     }}
     if (shelfMesh) shelfMesh.setColorAt(index, color);
 
@@ -430,6 +501,7 @@ def render_three_html(payload: dict, placement_color: str = "27ae60") -> str:
         placementMesh.setMatrixAt(placementEntries.length, dummy.matrix);
         placementEntries.push({{
           shelf_id: shelf.shelf_id,
+          shelf_type: shelf.shelf_type,
           order_id: placement.order_id,
           company: placement.company,
           ship_date: placement.ship_date,
@@ -515,6 +587,7 @@ def render_three_html(payload: dict, placement_color: str = "27ae60") -> str:
   function describeShelf(shelf) {{
     return `
       <strong>Raf:</strong> ${{shelf.shelf_id}}<br />
+      <strong>Raf tipi:</strong> ${{shelf.shelf_type}}<br />
       <strong>Koridor / Taraf / Sıra / Y:</strong> ${{shelf.aisle_index}} / ${{shelf.side_index}} / ${{shelf.row_index}} / ${{shelf.y_index}}<br />
       <strong>Doluluk:</strong> ${{(shelf.utilization * 100).toFixed(1)}}%<br />
       <strong>Sipariş:</strong> ${{shelf.placement_count}}<br />
@@ -605,6 +678,7 @@ def render_three_html(payload: dict, placement_color: str = "27ae60") -> str:
       <div style="font-size:11px;color:rgba(239,244,255,0.5);margin-bottom:8px">
         Koridor ${{shelf.aisle_index}} / Taraf ${{shelf.side_index}} / Sıra ${{shelf.row_index}} / Kat ${{shelf.y_index}}
       </div>
+      <div style="font-size:12px;color:rgba(239,244,255,0.7);margin-bottom:2px">Raf Tipi — ${{shelf.shelf_type}}</div>
       <div style="font-size:12px;color:rgba(239,244,255,0.7);margin-bottom:2px">Alan Kullanımı — ${{utilPct}}%</div>
       <div class="progress-track">
         <div class="progress-fill" style="width:${{Math.min(util*100,100)}}%;background:${{barColor}}"></div>

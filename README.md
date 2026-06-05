@@ -7,6 +7,8 @@ Bu proje, oluklu mukavva fabrikası depolarında gelen siparişleri en uygun raf
 - Tamamen kişiselleştirilebilir bir parametre yapısı sunar.
 - Sipariş bilgisinden otomatik raf önerisi üretir.
 - Sık kullanılan paket ölçülerini hazır liste olarak kaydedip sipariş formunda yeniden kullanır.
+- Raf tiplerini sol menüden ekleyip silebilirsiniz.
+- Seçili raf tipinin ölçü ve boşluk parametrelerini sol menüde ayrıca düzenleyebilirsiniz.
 - Rafları adet değil, santimetre bazlı boş alan matrisi ile yönetir.
 - Taşıyıcıya manuel müdahale imkanı verir (rafı dolu/açık işaretleme).
 - Rafı tek tuşla tamamen boşaltma fonksiyonu sunar.

@@ -1,20 +1,24 @@
 from __future__ import annotations
 
-from html import escape
 from datetime import date
+from html import escape
 from uuid import uuid4
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from src.engine import (
     apply_new_configs,
     apply_shelf_type_config,
+    apply_shelf_type_layouts_to_available_shelves,
+    assign_shelf_type,
     clear_all_shelves,
     clear_shelf,
     mark_shelf_manual_full,
     orders_in_date_window,
     place_order_on_shelf,
     suggest_shelves_for_order,
+    sort_orders_for_automatic_placement,
 )
 from src.models import (
     AlgorithmConfig,
@@ -27,7 +31,7 @@ from src.models import (
     make_shelf_type_layout,
 )
 from src.storage import load_state, save_state
-from src.visualization import build_scene_payload, render_three_html
+from src.visualization import build_scene_payload, render_three_html, shelf_type_color
 
 import csv
 import io
@@ -119,6 +123,14 @@ if "order_company" not in st.session_state:
     st.session_state.order_company = "Örnek Firma"
 if "order_ship_date" not in st.session_state:
     st.session_state.order_ship_date = date.today()
+if "order_due_date" not in st.session_state:
+    st.session_state.order_due_date = date.today()
+if "order_entry_date" not in st.session_state:
+    st.session_state.order_entry_date = date.today()
+if "order_destination" not in st.session_state:
+    st.session_state.order_destination = ""
+if "order_max_storage_days" not in st.session_state:
+    st.session_state.order_max_storage_days = 14
 
 # 3B sekmesi durumu (filtre vs.)
 if "view3d_aisles" not in st.session_state:
@@ -163,6 +175,71 @@ if state_dirty:
 
 shelf_type_layout_options = sorted(state.shelf_type_layouts, key=lambda layout: (layout.sequence, layout.label.lower()))
 shelf_type_options = [layout.label for layout in shelf_type_layout_options] or (state.shelf_types or ["Standart"])
+
+
+def _shelf_type_card_html(
+    shelf_type: str,
+    config: ShelfTypeConfig,
+    layout: ShelfTypeLayout,
+    assigned_count: int,
+    color: str,
+    *,
+    compact: bool = False,
+) -> str:
+    safe_type = escape(shelf_type)
+    size_text = f"{config.shelf_width_cm}×{config.shelf_depth_cm}×{config.shelf_height_cm} cm"
+    clearance_text = f"{config.clearance_width_cm}/{config.clearance_depth_cm} cm"
+    padding = "10px 11px" if compact else "12px 13px"
+    return f"""
+    <div style="
+        border:1px solid rgba(49, 62, 82, 0.20);
+        border-left:6px solid {color};
+        border-radius:10px;
+        padding:{padding};
+        margin:8px 0;
+        background:linear-gradient(135deg, rgba(255,255,255,0.98), rgba(248,250,252,0.92));
+        box-shadow:0 8px 24px rgba(15,23,42,0.08);
+    ">
+      <div style="display:flex;align-items:center;gap:9px;margin-bottom:8px">
+        <span style="width:14px;height:14px;border-radius:50%;background:{color};display:inline-block"></span>
+        <div style="font-weight:700;color:#1f2937;line-height:1.2">{safe_type}</div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;color:#475569;font-size:12px">
+        <div><b>Ölçü</b><br>{size_text}</div>
+        <div><b>Boşluk</b><br>{clearance_text}</div>
+        <div><b>Sıra</b><br>{layout.sequence}</div>
+        <div><b>Blok</b><br>{layout.block_size}</div>
+      </div>
+      <div style="margin-top:8px;color:#64748b;font-size:12px">Atanmış raf: <b>{assigned_count}</b></div>
+    </div>
+    """
+
+
+def _shelf_type_pattern_preview_html(options: list[str], layouts: list[ShelfTypeLayout]) -> str:
+    layout_by_type = {layout.label: layout for layout in layouts}
+    pattern: list[str] = []
+    ordered_types = sorted(
+        options,
+        key=lambda item: (layout_by_type.get(item, make_shelf_type_layout(item)).sequence, item.lower()),
+    )
+    for shelf_type in ordered_types:
+        block_size = layout_by_type.get(shelf_type, make_shelf_type_layout(shelf_type)).block_size
+        pattern.extend([shelf_type] * min(block_size, 8))
+    if not pattern:
+        return ""
+    preview_items = pattern[:24]
+    chips = "".join(
+        f'<span title="{escape(item)}" style="height:18px;border-radius:5px;background:{shelf_type_color(item, options)};display:block"></span>'
+        for item in preview_items
+    )
+    return f"""
+    <div style="margin:8px 0 12px 0;padding:10px;border-radius:10px;background:#f8fafc;border:1px solid #e2e8f0">
+      <div style="font-size:12px;font-weight:700;color:#334155;margin-bottom:6px">Yan yana blok önizlemesi</div>
+      <div style="display:grid;grid-template-columns:repeat(12,1fr);gap:4px">{chips}</div>
+      <div style="font-size:11px;color:#64748b;margin-top:6px">Her renk bir raf tipi bloğunu temsil eder; aynı kolonun katları aynı tipte kalır.</div>
+    </div>
+    """
+
 current_order_type = st.session_state.get("order_shelf_type_preference", "Tümü")
 if current_order_type != "Tümü" and current_order_type not in shelf_type_options:
     st.session_state.order_shelf_type_preference = "Tümü"
@@ -231,8 +308,15 @@ with st.sidebar:
         cluster_same_ship_date = st.checkbox(
             "Yakın sevk tarihlerini kümelendir", value=state.algorithm_config.cluster_same_ship_date
         )
+        cluster_same_destination = st.checkbox(
+            "Aynı hedefi/gideceği yeri kümelendir", value=state.algorithm_config.cluster_same_destination
+        )
         ship_date_cluster_days = st.number_input(
             "Sevk tarihi kümeleme günü", min_value=0, value=state.algorithm_config.ship_date_cluster_days
+        )
+
+        due_date_priority_days = st.number_input(
+            "Termin öncelik penceresi (gün)", min_value=1, value=state.algorithm_config.due_date_priority_days
         )
 
         weight_fill_efficiency = st.slider(
@@ -250,6 +334,18 @@ with st.sidebar:
         weight_date_cluster = st.slider(
             "Tarih kümelenme ağırlığı", 0.0, 1.0,
             value=float(state.algorithm_config.weight_date_cluster), step=0.01,
+        )
+        weight_destination_cluster = st.slider(
+            "Hedef kümelenme ağırlığı", 0.0, 1.0,
+            value=float(state.algorithm_config.weight_destination_cluster), step=0.01,
+        )
+        weight_due_date_priority = st.slider(
+            "Termin önceliği ağırlığı", 0.0, 1.0,
+            value=float(state.algorithm_config.weight_due_date_priority), step=0.01,
+        )
+        weight_storage_duration = st.slider(
+            "Kalış süresi ağırlığı", 0.0, 1.0,
+            value=float(state.algorithm_config.weight_storage_duration), step=0.01,
         )
         weight_balance = st.slider(
             "Dengeleme ağırlığı", 0.0, 1.0,
@@ -289,11 +385,16 @@ with st.sidebar:
             allow_rotation=allow_rotation,
             cluster_same_company=cluster_same_company,
             cluster_same_ship_date=cluster_same_ship_date,
+            cluster_same_destination=cluster_same_destination,
             ship_date_cluster_days=int(ship_date_cluster_days),
+            due_date_priority_days=int(due_date_priority_days),
             weight_fill_efficiency=float(weight_fill_efficiency),
             weight_travel_distance=float(weight_travel_distance),
             weight_company_cluster=float(weight_company_cluster),
             weight_date_cluster=float(weight_date_cluster),
+            weight_destination_cluster=float(weight_destination_cluster),
+            weight_due_date_priority=float(weight_due_date_priority),
+            weight_storage_duration=float(weight_storage_duration),
             weight_balance=float(weight_balance),
             top_k_suggestions=int(top_k_suggestions),
             min_fragment_cm2=int(min_fragment_cm2),
@@ -308,7 +409,11 @@ with st.sidebar:
 
     st.markdown("---")
     st.subheader("Raf Tipleri ve Düzeni")
-    st.caption("Aynı bölümde raf tipi parametrelerini, depodaki sıralarını ve blok uzunluklarını yönetebilirsiniz.")
+    st.caption("Raf tipleri yan yana kolon blokları halinde uygulanır; aynı kolonun tüm katları aynı tipte kalır.")
+    st.markdown(
+        _shelf_type_pattern_preview_html(shelf_type_options, state.shelf_type_layouts),
+        unsafe_allow_html=True,
+    )
 
     if st.session_state.new_shelf_type_label_pending_reset:
         st.session_state.new_shelf_type_label = ""
@@ -327,6 +432,17 @@ with st.sidebar:
     selected_shelf_layout = next(
         (layout for layout in state.shelf_type_layouts if layout.label == selected_shelf_type),
         make_shelf_type_layout(selected_shelf_type),
+    )
+    selected_type_count = sum(1 for shelf in state.shelves if shelf.shelf_type == selected_shelf_type)
+    st.markdown(
+        _shelf_type_card_html(
+            selected_shelf_type,
+            selected_shelf_type_config,
+            selected_shelf_layout,
+            selected_type_count,
+            shelf_type_color(selected_shelf_type, shelf_type_options),
+        ),
+        unsafe_allow_html=True,
     )
 
     with st.form("shelf_type_config_form"):
@@ -422,6 +538,7 @@ with st.sidebar:
                     existing_layout.sequence = int(sequence)
                     existing_layout.block_size = int(block_size)
                 state.shelf_type_layouts.sort(key=lambda layout: (layout.sequence, layout.label.lower()))
+                apply_shelf_type_layouts_to_available_shelves(state)
                 st.session_state.state = state
                 save_state(state)
                 st.success(message)
@@ -476,6 +593,7 @@ with st.sidebar:
                 )
             )
             state.shelf_type_layouts.sort(key=lambda layout: (layout.sequence, layout.label.lower()))
+            apply_shelf_type_layouts_to_available_shelves(state)
             st.session_state.state = state
             save_state(state)
             st.session_state.new_shelf_type_label_pending_reset = True
@@ -486,34 +604,47 @@ with st.sidebar:
     if state.shelf_types:
         for index, shelf_type in enumerate(shelf_type_options):
             layout = next((item for item in state.shelf_type_layouts if item.label == shelf_type), make_shelf_type_layout(shelf_type))
-            type_col, seq_col, block_col, count_col, delete_col = st.columns([3, 1, 1, 1, 1])
+            config = state.shelf_type_configs.get(
+                shelf_type,
+                make_shelf_type_config(shelf_type, state.warehouse_config),
+            )
+            assigned_count = sum(1 for shelf in state.shelves if shelf.shelf_type == shelf_type)
+            type_col, delete_col = st.columns([5, 1])
             with type_col:
-                st.write(shelf_type)
-            with seq_col:
-                st.caption(f"Sıra: {layout.sequence}")
-            with block_col:
-                st.caption(f"Blok: {layout.block_size}")
-            with count_col:
-                assigned_count = sum(1 for shelf in state.shelves if shelf.shelf_type == shelf_type)
-                st.caption(f"{assigned_count}")
+                st.markdown(
+                    _shelf_type_card_html(
+                        shelf_type,
+                        config,
+                        layout,
+                        assigned_count,
+                        shelf_type_color(shelf_type, shelf_type_options),
+                        compact=True,
+                    ),
+                    unsafe_allow_html=True,
+                )
             with delete_col:
+                st.write("")
+                st.write("")
                 if st.button("✕", key=f"delete_shelf_type_{index}", help=f"{shelf_type} tipini sil"):
                     if len(state.shelf_types) == 1:
                         st.error("En az bir raf tipi bırakmalısınız.")
                     else:
                         removed_type = shelf_type
-                        state.shelf_types = [item for item in state.shelf_types if item != removed_type]
-                        state.shelf_type_configs.pop(removed_type, None)
-                        state.shelf_type_layouts = [layout_item for layout_item in state.shelf_type_layouts if layout_item.label != removed_type]
-                        fallback_type = state.shelf_types[0] if state.shelf_types else "Standart"
-                        for shelf in state.shelves:
-                            if shelf.shelf_type == removed_type:
-                                shelf.shelf_type = fallback_type
-                        state.shelf_type_layouts.sort(key=lambda item: (item.sequence, item.label.lower()))
-                        st.session_state.state = state
-                        save_state(state)
-                        st.success(f'"{removed_type}" raf tipi silindi.')
-                        st.rerun()
+                        removed_shelves = [shelf for shelf in state.shelves if shelf.shelf_type == removed_type]
+                        if any(shelf.placements or shelf.manual_full for shelf in removed_shelves):
+                            st.error("Bu raf tipinde dolu ya da kilitli raf var. Silmeden önce bu rafları boşaltın.")
+                        else:
+                            state.shelf_types = [item for item in state.shelf_types if item != removed_type]
+                            state.shelf_type_configs.pop(removed_type, None)
+                            state.shelf_type_layouts = [
+                                layout_item for layout_item in state.shelf_type_layouts if layout_item.label != removed_type
+                            ]
+                            state.shelf_type_layouts.sort(key=lambda item: (item.sequence, item.label.lower()))
+                            apply_shelf_type_layouts_to_available_shelves(state)
+                            st.session_state.state = state
+                            save_state(state)
+                            st.success(f'"{removed_type}" raf tipi silindi.')
+                            st.rerun()
     else:
         st.caption("Henüz raf tipi eklenmedi.")
 
@@ -599,7 +730,18 @@ if view == "Sipariş Yerleştir":
         product_depth_cm = st.number_input("Ürün derinliği (cm)", min_value=1, key="order_product_depth_cm")
         pallet_depth_cm = st.number_input("Palet derinliği (cm)", min_value=1, key="order_pallet_depth_cm")
     company = st.text_input("Firma", key="order_company")
-    ship_date = st.date_input("Sevk tarihi", key="order_ship_date")
+    destination = st.text_input("Gideceği yer", key="order_destination")
+    d1, d2, d3, d4 = st.columns(4)
+    with d1:
+        entry_date = st.date_input("Giriş tarihi", key="order_entry_date")
+    with d2:
+        due_date = st.date_input("Termin tarihi", key="order_due_date")
+    with d3:
+        ship_date = st.date_input("Sevk tarihi", key="order_ship_date")
+    with d4:
+        max_storage_days = st.number_input(
+            "Maks. kalış (gün)", min_value=0, max_value=3650, key="order_max_storage_days"
+        )
     preferred_shelf_type = st.selectbox(
         "Raf tipi tercihi",
         options=["Tümü"] + shelf_type_options,
@@ -651,6 +793,10 @@ if view == "Sipariş Yerleştir":
             pallet_depth_cm=int(pallet_depth_cm),
             company=company.strip(),
             ship_date=ship_date.strftime("%Y-%m-%d"),
+            due_date=due_date.strftime("%Y-%m-%d"),
+            entry_date=entry_date.strftime("%Y-%m-%d"),
+            destination=destination.strip() or company.strip(),
+            max_storage_days=int(max_storage_days),
         )
 
         suggestions = suggest_shelves_for_order(state, order, allowed_shelf_types=allowed_shelf_types)
@@ -680,7 +826,7 @@ if view == "Sipariş Yerleştir":
     st.subheader("Toplu Sipariş Yükle (CSV veya JSON)")
     st.info(
         "Alanlar: order_id, product_width_cm, product_depth_cm, pallet_width_cm, "
-        "pallet_depth_cm, company, ship_date (YYYY-MM-DD)."
+        "pallet_depth_cm, company, destination, entry_date, due_date, ship_date (YYYY-MM-DD), max_storage_days."
     )
 
     uploaded_file = st.file_uploader("Veri dosyası seçin", type=["csv", "json"], key="dataset_uploader")
@@ -724,18 +870,69 @@ if view == "Sipariş Yerleştir":
             errors.append({"row": 0, "error": f"Dosya çözümlenemedi: {exc}"})
             return [], errors
 
+        def _first_value(item: dict, *keys: str, default: str = "") -> str:
+            for key in keys:
+                value = item.get(key)
+                if value is not None and str(value).strip() != "":
+                    return str(value).strip()
+            return default
+
+        def _int_value(item: dict, *keys: str, default: int = 0) -> int:
+            value = _first_value(item, *keys, default=str(default))
+            return int(float(value or default))
+
+        today_text = date.today().strftime("%Y-%m-%d")
         parsed: list[Order] = []
         for i, item in enumerate(orders_list, start=1):
             try:
+                ship_date_value = _first_value(item, "ship_date", "sevk_tarihi", default=today_text)
+                company_value = _first_value(item, "company", "firma", default="-")
+                destination_value = _first_value(
+                    item,
+                    "destination",
+                    "target",
+                    "gidecegi_yer",
+                    "gideceği_yer",
+                    "hedef",
+                    default=company_value,
+                )
                 parsed.append(
                     Order(
-                        order_id=str(item.get("order_id", "")).strip() or f"ORD-{uuid4().hex[:8].upper()}",
-                        product_width_cm=int(float(item.get("product_width_cm") or item.get("product_width") or 0)),
-                        product_depth_cm=int(float(item.get("product_depth_cm") or item.get("product_depth") or 0)),
-                        pallet_width_cm=int(float(item.get("pallet_width_cm") or item.get("pallet_width") or 0)),
-                        pallet_depth_cm=int(float(item.get("pallet_depth_cm") or item.get("pallet_depth") or 0)),
-                        company=str(item.get("company", "")).strip() or "-",
-                        ship_date=str(item.get("ship_date", "")).strip() or date.today().strftime("%Y-%m-%d"),
+                        order_id=_first_value(item, "order_id", "siparis_id", "sipariş_id")
+                        or f"ORD-{uuid4().hex[:8].upper()}",
+                        product_width_cm=_int_value(item, "product_width_cm", "product_width", "urun_genislik_cm"),
+                        product_depth_cm=_int_value(item, "product_depth_cm", "product_depth", "urun_derinlik_cm"),
+                        pallet_width_cm=_int_value(item, "pallet_width_cm", "pallet_width", "palet_genislik_cm"),
+                        pallet_depth_cm=_int_value(item, "pallet_depth_cm", "pallet_depth", "palet_derinlik_cm"),
+                        company=company_value,
+                        ship_date=ship_date_value,
+                        due_date=_first_value(
+                            item,
+                            "due_date",
+                            "deadline",
+                            "termin_date",
+                            "termin_tarihi",
+                            default=ship_date_value,
+                        ),
+                        entry_date=_first_value(
+                            item,
+                            "entry_date",
+                            "arrival_date",
+                            "giris_tarihi",
+                            "giriş_tarihi",
+                            default=today_text,
+                        ),
+                        destination=destination_value,
+                        max_storage_days=_int_value(
+                            item,
+                            "max_storage_days",
+                            "max_stay_days",
+                            "max_kalis_suresi",
+                            "max_kalış_süresi",
+                            "kalabilecegi_gun",
+                            "kalabileceği_gün",
+                            default=0,
+                        ),
                     )
                 )
             except Exception as exc:
@@ -763,10 +960,18 @@ if view == "Sipariş Yerleştir":
             if st.button("Tümünü Otomatik Yerleştir"):
                 results: list[dict] = []
                 placed = 0
-                for o in parsed_orders:
+                ordered_batch = sort_orders_for_automatic_placement(parsed_orders, state.algorithm_config)
+                for o in ordered_batch:
                     suggestions = suggest_shelves_for_order(state, o, allowed_shelf_types=allowed_shelf_types)
                     if not suggestions:
-                        results.append({"order_id": o.order_id, "status": "Öneri yok"})
+                        results.append(
+                            {
+                                "order_id": o.order_id,
+                                "destination": o.destination_key,
+                                "due_date": o.effective_due_date,
+                                "status": "Öneri yok",
+                            }
+                        )
                         continue
                     best = suggestions[0]
                     ok, msg = place_order_on_shelf(
@@ -774,16 +979,35 @@ if view == "Sipariş Yerleştir":
                     )
                     if ok:
                         placed += 1
-                        results.append({"order_id": o.order_id, "status": "Yerleştirildi", "shelf": best["shelf_id"]})
+                        results.append(
+                            {
+                                "order_id": o.order_id,
+                                "destination": o.destination_key,
+                                "due_date": o.effective_due_date,
+                                "status": "Yerleştirildi",
+                                "shelf": best["shelf_id"],
+                                "shelf_type": best["shelf_type"],
+                            }
+                        )
                     else:
-                        results.append({"order_id": o.order_id, "status": f"Hata: {msg}"})
+                        results.append(
+                            {
+                                "order_id": o.order_id,
+                                "destination": o.destination_key,
+                                "due_date": o.effective_due_date,
+                                "status": f"Hata: {msg}",
+                            }
+                        )
                 save_state(state)
                 st.success(f"{placed}/{len(parsed_orders)} sipariş yerleştirildi.")
                 st.dataframe(results, width="stretch")
         else:
             st.write("Her sipariş için öneriler ve manuel yerleştirme düğmeleri")
             for o in parsed_orders:
-                st.markdown(f"**Sipariş:** {o.order_id} — Firma: {o.company} — Sevk: {o.ship_date}")
+                st.markdown(
+                    f"**Sipariş:** {o.order_id} — Firma: {o.company} — Hedef: {o.destination_key} "
+                    f"— Termin: {o.effective_due_date} — Sevk: {o.ship_date}"
+                )
                 suggestions = suggest_shelves_for_order(state, o, allowed_shelf_types=allowed_shelf_types)
                 if not suggestions:
                     st.warning("Bu sipariş için öneri bulunamadı.")
@@ -892,20 +1116,7 @@ elif view == "3B Görünüm":
         visible_shelf_types=selected_shelf_types,
     )
 
-    iframe_html = f"""
-    <iframe
-      srcdoc="{escape(render_three_html(payload, placement_color), quote=True)}"
-      style="width: 100%; height: 720px; border: 0; border-radius: 12px; overflow: hidden;"
-      sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-    ></iframe>
-    """
-    if hasattr(st, "html"):
-        try:
-            st.html(iframe_html, unsafe_allow_javascript=True)
-        except TypeError:
-            st.html(iframe_html)
-    else:
-        st.markdown(iframe_html, unsafe_allow_html=True)
+    components.html(render_three_html(payload, placement_color), height=720, scrolling=False)
 
     # Seçili raf işlem paneli (3B'den gelen tıklama veya manuel seçim)
     selected_id = st.session_state.shelf_mgmt_override
@@ -1100,10 +1311,13 @@ elif view == "Raf Yönetimi":
                 key=shelf_type_widget_key,
             )
             if selected_type != selected_state.shelf_type:
-                selected_state.shelf_type = selected_type
-                save_state(state)
-                st.success(f"{selected_state.shelf_id} raf tipi {selected_type} olarak güncellendi.")
-                st.rerun()
+                ok, message = assign_shelf_type(state, selected_state.shelf_id, selected_type)
+                if ok:
+                    save_state(state)
+                    st.success(message)
+                    st.rerun()
+                else:
+                    st.error(message)
 
             if selected_state.placements:
                 with st.expander(f"Yerleşik Siparişler ({len(selected_state.placements)})", expanded=True):

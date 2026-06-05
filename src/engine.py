@@ -60,23 +60,40 @@ def _apply_type_config_to_empty_shelf(shelf: ShelfState, shelf_type: str, config
     shelf.free_rectangles = [Rect(x=0, y=0, width=config.shelf_width_cm, depth=config.shelf_depth_cm)]
 
 
+def autofill_primary_block_size(state: AppState) -> None:
+    """Primary (en düşük sequence) raf tipinin block_size'ını kalan koridorları
+    dolduracak şekilde otomatik ayarlar. Yeni tip eklendiğinde Standart geri çekilip
+    aisle sayısına eşit toplam pattern üretir; tüm koridorlar tek tipte kalır.
+    """
+    if not state.shelf_type_layouts:
+        return
+    total_aisles = max(1, state.warehouse_config.aisles)
+    sorted_layouts = sorted(state.shelf_type_layouts, key=lambda l: (l.sequence, l.label.lower()))
+    primary = sorted_layouts[0]
+    others_total = sum(layout.block_size for layout in sorted_layouts[1:])
+    primary.block_size = max(1, total_aisles - others_total)
+
+
 def apply_shelf_type_layouts_to_available_shelves(state: AppState) -> int:
+    """Raf tiplerini koridor (aisle) bazında atar. Her koridorun tüm rafları aynı
+    tipte olur; karışık satırlardan kaçınmak için bay-bazlı atama kaldırıldı.
+    Bir koridorda dolu/kilitli raf varsa o koridor atlanır (mevcut veri korunur)."""
     pattern = _build_shelf_type_pattern(state.shelf_types, state.shelf_type_layouts)
     updated = 0
     if not pattern:
         return updated
 
-    bays: dict[tuple[int, int, int], list[ShelfState]] = {}
+    aisle_shelves: dict[int, list[ShelfState]] = {}
     for shelf in state.shelves:
-        bays.setdefault((shelf.aisle_index, shelf.side_index, shelf.row_index), []).append(shelf)
+        aisle_shelves.setdefault(shelf.aisle_index, []).append(shelf)
 
-    for bay_index, bay_key in enumerate(sorted(bays)):
-        bay_shelves = bays[bay_key]
-        if any(shelf.placements or shelf.manual_full for shelf in bay_shelves):
+    for aisle_idx in sorted(aisle_shelves.keys()):
+        shelves_in_aisle = aisle_shelves[aisle_idx]
+        if any(shelf.placements or shelf.manual_full for shelf in shelves_in_aisle):
             continue
-        shelf_type = pattern[bay_index % len(pattern)]
+        shelf_type = pattern[(aisle_idx - 1) % len(pattern)]
         config = get_shelf_type_config(state, shelf_type)
-        for shelf in bay_shelves:
+        for shelf in shelves_in_aisle:
             _apply_type_config_to_empty_shelf(shelf, shelf_type, config)
             updated += 1
     return updated
@@ -110,12 +127,12 @@ def build_empty_shelves(
         for shelf_type in shelf_type_list
     }
     shelf_pattern = _build_shelf_type_pattern(shelf_type_list, shelf_type_layouts)
-    bay_index = 0
     for aisle in range(1, config.aisles + 1):
+        # Aisle-bazlı atama: her koridor tek tipte raf içerir
+        shelf_type = shelf_pattern[(aisle - 1) % len(shelf_pattern)]
+        shelf_config = resolved_shelf_type_configs[shelf_type]
         for side in range(1, config.sides_per_aisle + 1):
             for row in range(1, config.rows_per_side + 1):
-                shelf_type = shelf_pattern[bay_index % len(shelf_pattern)]
-                shelf_config = resolved_shelf_type_configs[shelf_type]
                 for y_index in range(1, config.shelves_per_row + 1):
                     shelves.append(
                         ShelfState(
@@ -138,7 +155,6 @@ def build_empty_shelves(
                             ],
                         )
                     )
-                bay_index += 1
     return shelves
 
 
@@ -374,6 +390,9 @@ def suggest_shelves_for_order(
                 access_pressure = max(due_urgency, storage_pressure)
                 distance_component = distance_score * (1.0 + access_pressure)
 
+                # Not: storage_violation order-bazlı sabit olduğu için distance_score
+                # ile çarpıyoruz, aksi halde tüm raflara aynı miktar eklenir ve
+                # sıralamayı hiç etkilemez (dead weight).
                 total_score = (
                     algo.weight_fill_efficiency * fill_efficiency_penalty
                     + algo.weight_travel_distance * distance_component
@@ -381,7 +400,7 @@ def suggest_shelves_for_order(
                     - algo.weight_date_cluster * date_bonus
                     - algo.weight_destination_cluster * destination_bonus
                     + algo.weight_due_date_priority * due_urgency * distance_score
-                    + algo.weight_storage_duration * ((storage_pressure * distance_score) + storage_violation)
+                    + algo.weight_storage_duration * (storage_pressure + storage_violation) * distance_score
                     + algo.weight_balance * balance_penalty
                 )
 
@@ -541,14 +560,15 @@ def apply_new_configs(
     new_algorithm: AlgorithmConfig,
     rebuild_if_needed: bool,
 ) -> AppState:
+    # Not: shelf_width/depth/height_cm artık per shelf_type tutuluyor; warehouse_config
+    # bunları sadece yeni tipler için varsayılan olarak kullanıyor. Bu yüzden topoloji
+    # değişikliği kontrolünde yalnızca gerçek topoloji alanlarına bakıyoruz, aksi halde
+    # bir ölçü düzenlemesi tüm rafları ve siparişleri yok ediyor.
     same_topology = (
         state.warehouse_config.aisles == new_warehouse.aisles
         and state.warehouse_config.sides_per_aisle == new_warehouse.sides_per_aisle
         and state.warehouse_config.rows_per_side == new_warehouse.rows_per_side
         and state.warehouse_config.shelves_per_row == new_warehouse.shelves_per_row
-        and state.warehouse_config.shelf_width_cm == new_warehouse.shelf_width_cm
-        and state.warehouse_config.shelf_depth_cm == new_warehouse.shelf_depth_cm
-        and state.warehouse_config.shelf_height_cm == new_warehouse.shelf_height_cm
     )
 
     state.warehouse_config = replace(new_warehouse)

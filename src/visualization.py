@@ -420,10 +420,15 @@ def render_three_html(payload: dict, placement_color: str = "27ae60") -> str:
   const maxShelfWidthCm = Math.max(1, ...payload.shelves.map(s => s.width_cm || 1));
   const maxShelfDepthCm = Math.max(1, ...payload.shelves.map(s => s.depth_cm || 1));
   const maxShelfHeightCm = Math.max(1, ...payload.shelves.map(s => s.height_cm || 1));
+  // Önce side_gap'i belirle, sonra row_pitch'i ona göre. Aksi halde komşu sıralar
+  // birbirinin yanlamasına uzanan parçasıyla z ekseninde üst üste biniyor.
+  const sideGap = Math.max(L.side_gap, L.shelf_depth * 0.8 + 0.55);
   const P = {{
     aisle_pitch: Math.max(L.aisle_pitch, L.shelf_width + 2.4),
-    row_pitch: Math.max(L.row_pitch, L.shelf_depth + 0.5),
-    side_gap: Math.max(L.side_gap, L.shelf_depth * 0.8 + 0.55),
+    side_gap: sideGap,
+    // Bir sıranın toplam z genişliği = 2·side_gap + shelf_depth (iki taraftaki
+    // rafın kenarları arası). Sıralar arasında ek 0.25 birim back-to-back boşluk.
+    row_pitch: Math.max(L.row_pitch, 2 * sideGap + L.shelf_depth + 0.25),
     level_pitch: Math.max(L.level_pitch, L.shelf_height + L.placement_height + 0.28),
   }};
 

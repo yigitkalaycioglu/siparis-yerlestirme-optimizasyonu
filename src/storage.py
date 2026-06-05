@@ -28,6 +28,11 @@ def load_state() -> AppState:
 
 
 def save_state(state: AppState) -> None:
+    """Atomik kayıt: önce .tmp dosyasına yaz, sonra rename et.
+    Kesilme (Ctrl+C, OS kapanması, disk dolması) hâlinde state.json bozulmaz."""
     ensure_data_dir()
-    with STATE_FILE.open("w", encoding="utf-8") as f:
+    tmp_file = STATE_FILE.with_suffix(STATE_FILE.suffix + ".tmp")
+    with tmp_file.open("w", encoding="utf-8") as f:
         json.dump(to_dict(state), f, indent=2, ensure_ascii=False)
+        f.flush()
+    tmp_file.replace(STATE_FILE)

@@ -12,6 +12,7 @@ from src.engine import (
     apply_shelf_type_config,
     apply_shelf_type_layouts_to_available_shelves,
     assign_shelf_type,
+    autofill_primary_block_size,
     clear_all_shelves,
     clear_shelf,
     mark_shelf_manual_full,
@@ -236,7 +237,7 @@ def _shelf_type_pattern_preview_html(options: list[str], layouts: list[ShelfType
     <div style="margin:8px 0 12px 0;padding:10px;border-radius:10px;background:#f8fafc;border:1px solid #e2e8f0">
       <div style="font-size:12px;font-weight:700;color:#334155;margin-bottom:6px">Yan yana blok önizlemesi</div>
       <div style="display:grid;grid-template-columns:repeat(12,1fr);gap:4px">{chips}</div>
-      <div style="font-size:11px;color:#64748b;margin-top:6px">Her renk bir raf tipi bloğunu temsil eder; aynı kolonun katları aynı tipte kalır.</div>
+      <div style="font-size:11px;color:#64748b;margin-top:6px">Her renk bir <b>koridor</b>'u (aisle) temsil eder; o koridorun tüm sıra/taraf/katları aynı tipte kalır.</div>
     </div>
     """
 
@@ -244,11 +245,36 @@ current_order_type = st.session_state.get("order_shelf_type_preference", "Tümü
 if current_order_type != "Tümü" and current_order_type not in shelf_type_options:
     st.session_state.order_shelf_type_preference = "Tümü"
 
-current_visible_types = st.session_state.get("view3d_visible_shelf_types", shelf_type_options)
-if isinstance(current_visible_types, list):
-    cleaned_visible_types = [shelf_type for shelf_type in current_visible_types if shelf_type in shelf_type_options]
-    if cleaned_visible_types != current_visible_types:
-        st.session_state.view3d_visible_shelf_types = cleaned_visible_types or list(shelf_type_options)
+if "view3d_visible_shelf_types" in st.session_state:
+    current_visible_types = st.session_state.view3d_visible_shelf_types
+    if isinstance(current_visible_types, list):
+        kept = [shelf_type for shelf_type in current_visible_types if shelf_type in shelf_type_options]
+        # Yeni eklenen raf tipleri otomatik görünür olsun
+        for shelf_type in shelf_type_options:
+            if shelf_type not in kept:
+                kept.append(shelf_type)
+        if kept != current_visible_types:
+            st.session_state.view3d_visible_shelf_types = kept or list(shelf_type_options)
+
+# Topoloji değişince 3B filtrelerini geçerli aralığa çek (yeni koridorlar/katlar görünür kalsın)
+_aisle_options_for_sync = list(range(1, state.warehouse_config.aisles + 1))
+if "multi_aisles" in st.session_state and isinstance(st.session_state.multi_aisles, list):
+    cur_aisles = st.session_state.multi_aisles
+    kept_aisles = [a for a in cur_aisles if a in _aisle_options_for_sync]
+    for a in _aisle_options_for_sync:
+        if a not in kept_aisles:
+            kept_aisles.append(a)
+    if kept_aisles != cur_aisles:
+        st.session_state.multi_aisles = kept_aisles or _aisle_options_for_sync
+if "slider_levels" in st.session_state:
+    _level_max = state.warehouse_config.shelves_per_row
+    cur_levels = st.session_state.slider_levels
+    if isinstance(cur_levels, tuple) and len(cur_levels) == 2:
+        lo, hi = int(cur_levels[0]), int(cur_levels[1])
+        new_lo = max(1, min(lo, _level_max))
+        new_hi = max(new_lo, min(hi, _level_max))
+        if (new_lo, new_hi) != (lo, hi):
+            st.session_state.slider_levels = (new_lo, new_hi)
 
 # ── Sidebar: Sadece fabrika parametreleri ──────────────────────────────────
 with st.sidebar:
@@ -409,7 +435,11 @@ with st.sidebar:
 
     st.markdown("---")
     st.subheader("Raf Tipleri ve Düzeni")
-    st.caption("Raf tipleri yan yana kolon blokları halinde uygulanır; aynı kolonun tüm katları aynı tipte kalır.")
+    st.caption(
+        "Her raf tipi ayrı bir **koridor** (aisle) olarak atanır; bir koridorun "
+        "tüm sıra/taraf/katları aynı tipte kalır. Yeni tip eklediğinizde Standart "
+        "(en düşük sırayla atanmış primary tip) otomatik küçülür ve kalan koridorları doldurur."
+    )
     st.markdown(
         _shelf_type_pattern_preview_html(shelf_type_options, state.shelf_type_layouts),
         unsafe_allow_html=True,
@@ -538,6 +568,8 @@ with st.sidebar:
                     existing_layout.sequence = int(sequence)
                     existing_layout.block_size = int(block_size)
                 state.shelf_type_layouts.sort(key=lambda layout: (layout.sequence, layout.label.lower()))
+                # Kullanıcı non-primary'nin block_size'ını değiştirdiyse primary'yi yeniden hesapla
+                autofill_primary_block_size(state)
                 apply_shelf_type_layouts_to_available_shelves(state)
                 st.session_state.state = state
                 save_state(state)
@@ -589,10 +621,12 @@ with st.sidebar:
                 ShelfTypeLayout(
                     label=normalized_type,
                     sequence=max(layout.sequence for layout in state.shelf_type_layouts) + 1 if state.shelf_type_layouts else 1,
-                    block_size=source_layout.block_size,
+                    block_size=1,  # Yeni tip 1 koridor alır
                 )
             )
             state.shelf_type_layouts.sort(key=lambda layout: (layout.sequence, layout.label.lower()))
+            # Primary (Standart) kalan koridorları doldursun
+            autofill_primary_block_size(state)
             apply_shelf_type_layouts_to_available_shelves(state)
             st.session_state.state = state
             save_state(state)
@@ -640,9 +674,23 @@ with st.sidebar:
                                 layout_item for layout_item in state.shelf_type_layouts if layout_item.label != removed_type
                             ]
                             state.shelf_type_layouts.sort(key=lambda item: (item.sequence, item.label.lower()))
+                            # Primary geri büyüsün, kalan koridorları doldursun
+                            autofill_primary_block_size(state)
                             apply_shelf_type_layouts_to_available_shelves(state)
                             st.session_state.state = state
                             save_state(state)
+                            # Silinen tipe atıfta bulunan session_state anahtarlarını temizle
+                            if st.session_state.get("shelf_type_config_choice") == removed_type:
+                                st.session_state.pop("shelf_type_config_choice", None)
+                            if st.session_state.get("order_shelf_type_preference") == removed_type:
+                                st.session_state.order_shelf_type_preference = "Tümü"
+                            visible_types = st.session_state.get("view3d_visible_shelf_types")
+                            if isinstance(visible_types, list) and removed_type in visible_types:
+                                st.session_state.view3d_visible_shelf_types = [t for t in visible_types if t != removed_type]
+                            # Raf yönetimi sekmesindeki "raf tipi" selectbox'ı için widget anahtarları
+                            for key in list(st.session_state.keys()):
+                                if isinstance(key, str) and key.startswith("shelf_type_") and st.session_state.get(key) == removed_type:
+                                    st.session_state.pop(key, None)
                             st.success(f'"{removed_type}" raf tipi silindi.')
                             st.rerun()
     else:
@@ -687,6 +735,19 @@ st.markdown("---")
 # Sipariş Yerleştir
 # =================================================================
 if view == "Sipariş Yerleştir":
+    # Önceki render'da set edilmiş "yerleştirme sonrası" bildirimleri burada gösterilir
+    # (st.rerun sonrasında bile mesaj kaybolmasın).
+    _post_msg = st.session_state.pop("post_place_message", None)
+    if _post_msg:
+        msg_type, msg_text = _post_msg
+        if msg_type == "success":
+            st.success(msg_text)
+        else:
+            st.error(msg_text)
+    # Sipariş yerleştirildiyse yeni ID üret (widget'tan ÖNCE yapmak şart, sonra Streamlit izin vermez)
+    if st.session_state.pop("order_id_refresh_pending", False):
+        st.session_state.order_order_id = f"ORD-{uuid4().hex[:8].upper()}"
+
     st.subheader("Yeni Sipariş")
     st.info(
         "Hazır paket seçebilir, yeni ölçü girebilir veya mevcut ölçüleri preset olarak kaydedebilirsiniz. "
@@ -814,8 +875,13 @@ if view == "Sipariş Yerleştir":
             )
             if ok:
                 save_state(state)
-                st.success(f"Önerilen raf: **{best['shelf_id']}**. {message}")
-                st.caption("3B Görünüm sekmesinde sonucu görebilirsiniz.")
+                st.session_state.post_place_message = (
+                    "success",
+                    f"Önerilen raf: **{best['shelf_id']}**. {message} "
+                    f"3B Görünüm sekmesinde sonucu görebilirsiniz.",
+                )
+                st.session_state.order_id_refresh_pending = True
+                st.rerun()
             else:
                 st.error(message)
 

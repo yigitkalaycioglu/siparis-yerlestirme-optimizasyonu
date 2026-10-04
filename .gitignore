@@ -15,6 +15,7 @@ data/*.sqlite3
 data/runtime/
 data/uploads/
 data/backups/
+data/debug_*.json
 
 # Local environment / secrets
 .env

@@ -2,6 +2,8 @@
 
 Bu proje, oluklu mukavva fabrikası depolarında gelen siparişleri en uygun rafa yerleştirmek için geliştirilmiş bir karar destek uygulamasıdır.
 
+**Canlı demo:** https://yigitkalaycioglu.github.io/siparis-yerlestirme-optimizasyonu/ — kurulum gerektirmez; uygulama [stlite](https://github.com/whitphx/stlite) ile tarayıcıda (Pyodide) çalışır. İlk açılış birkaç saniye sürer, veriler yalnızca o sekmede tutulur. Örnek veri için `orders_1000.csv` dosyası kullanılabilir.
+
 ## Hedef
 
 - Tamamen kişiselleştirilebilir bir parametre yapısı sunar.
@@ -83,9 +85,12 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+Tarayıcı sürümü için ayrıca bir şey gerekmez: `index.html`, aynı `app.py` ve `src/` dosyalarını stlite ile çalıştırır. Yerelde denemek için klasörü herhangi bir statik sunucuyla açmak yeterli (`python -m http.server`).
+
 ## Dosya Yapısı
 
 - `app.py`: Streamlit arayüzü
+- `index.html`: GitHub Pages'teki tarayıcı sürümü (stlite)
 - `src/models.py`: Veri modelleri
 - `src/engine.py`: Yerleştirme algoritması
 - `src/storage.py`: JSON kalıcılık katmanı

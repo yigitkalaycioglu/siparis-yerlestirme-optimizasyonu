@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+  <title>Sipariş Yerleştirme Optimizasyonu</title>
+  <meta name="description" content="Oluklu mukavva deposunda gelen siparişler için raf yerleşimi öneren karar destek uygulaması (Streamlit, 3B depo simülasyonu). Tarayıcıda çalışır, kurulum gerektirmez." />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stlite/browser@1.9.2/build/stlite.css" />
+  <style>
+    body { margin: 0; }
+    .demo-bar {
+      position: fixed; right: 14px; bottom: 14px; z-index: 1000001;
+      display: flex; gap: 12px; align-items: center;
+      padding: 8px 14px; border-radius: 999px;
+      font: 13px/1.3 system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: rgba(15, 23, 42, .92); color: #cbd5e1; box-shadow: 0 6px 20px rgba(0,0,0,.25);
+    }
+    .demo-bar a { color: #7dd3fc; text-decoration: none; font-weight: 600; }
+    .demo-bar a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="demo-bar" title="Tarayıcıda çalışan canlı demo (Streamlit + Pyodide). Veriler yalnızca bu sekmede tutulur.">
+    <a href="./orders_1000.csv" download>Örnek sipariş verisi (CSV)</a>
+    <a href="https://github.com/yigitkalaycioglu/siparis-yerlestirme-optimizasyonu" target="_blank" rel="noopener">Kaynak kod</a>
+  </div>
+  <div id="root"></div>
+  <script type="module">
+    import { mount } from "https://cdn.jsdelivr.net/npm/@stlite/browser@1.9.2/build/stlite.js";
+    const files = ["app.py", "src/__init__.py", "src/engine.py", "src/models.py", "src/storage.py", "src/visualization.py"];
+    mount(
+      {
+        requirements: [],
+        entrypoint: "app.py",
+        streamlitConfig: { "client.toolbarMode": "viewer" },
+        files: Object.fromEntries(files.map((f) => [f, { url: `./${f}` }])),
+      },
+      document.getElementById("root"),
+    );
+  </script>
+</body>
+</html>
